@@ -1,4 +1,11 @@
 User-agent: *
 Allow: /
 Allow: /api/
-Allow: /cyclotruc/gitingest/
+# Update this path if your deployment structure changes or remove if not needed
+Allow: /Rlahuerta/CodeIngest/ # Or the path corresponding to your main repo example
+
+# Disallow temporary download paths if they follow a pattern
+# Disallow: /download/ # Uncomment if you want to block crawlers from download links
+
+Sitemap: /sitemap.xml # Add this if you have a sitemap
+

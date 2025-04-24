@@ -36,8 +36,7 @@ jobs:
 
     - name: Install dependencies
       run: |
-        pip install --upgrade pip
-        pip install -r requirements-dev.txt
+        poetry install --with dev
 
     - name: Run tests
       run: |
