@@ -9,8 +9,7 @@ def _should_include(path: Path, base_path: Path, include_patterns: Set[str]) -> 
     """
     Determine if the given file or directory path matches any of the include patterns.
 
-    This function checks whether the relative path of a file or directory matches any of the specified patterns. If a
-    match is found, it returns `True`, indicating that the file or directory should be included in further processing.
+    Checks if the pattern matches either the full relative path or just the filename.
 
     Parameters
     ----------
@@ -19,12 +18,12 @@ def _should_include(path: Path, base_path: Path, include_patterns: Set[str]) -> 
     base_path : Path
         The base directory from which the relative path is calculated.
     include_patterns : Set[str]
-        A set of patterns to check against the relative path.
+        A set of patterns to check against the relative path and filename.
 
     Returns
     -------
     bool
-        `True` if the path matches any of the include patterns, `False` otherwise.
+        `True` if the path or filename matches any include patterns, `False` otherwise.
     """
     try:
         rel_path = path.relative_to(base_path)
@@ -33,22 +32,20 @@ def _should_include(path: Path, base_path: Path, include_patterns: Set[str]) -> 
         return False
 
     rel_str = str(rel_path)
-    if path.is_dir():
-        rel_str += "/"
+    filename = path.name # Get just the filename
 
+    # Check if the pattern matches the full relative path OR just the filename
     for pattern in include_patterns:
-        if fnmatch(rel_str, pattern):
-            return True
-    return False
+        if fnmatch(rel_str, pattern) or fnmatch(filename, pattern):
+            return True # Match found
+    return False # No include pattern matched
 
 
 def _should_exclude(path: Path, base_path: Path, ignore_patterns: Set[str]) -> bool:
     """
     Determine if the given file or directory path matches any of the ignore patterns.
 
-    This function checks whether the relative path of a file or directory matches
-    any of the specified ignore patterns. If a match is found, it returns `True`, indicating
-    that the file or directory should be excluded from further processing.
+    Checks if the pattern matches either the full relative path or just the filename.
 
     Parameters
     ----------
@@ -57,21 +54,26 @@ def _should_exclude(path: Path, base_path: Path, ignore_patterns: Set[str]) -> b
     base_path : Path
         The base directory from which the relative path is calculated.
     ignore_patterns : Set[str]
-        A set of patterns to check against the relative path.
+        A set of patterns to check against the relative path and filename.
 
     Returns
     -------
     bool
-        `True` if the path matches any of the ignore patterns, `False` otherwise.
+        `True` if the path or filename matches any ignore patterns, `False` otherwise.
     """
     try:
         rel_path = path.relative_to(base_path)
     except ValueError:
-        # If path is not under base_path at all
-        return True
+        # If path is not under base_path at all, treat as excluded for safety?
+        # Or False? Let's stick to False - if it's outside, it won't be iterated anyway.
+        return False # Changed from True - path outside base shouldn't be implicitly excluded here.
 
     rel_str = str(rel_path)
+    filename = path.name # Get just the filename
+
+    # Check if the pattern matches the full relative path OR just the filename
     for pattern in ignore_patterns:
-        if pattern and fnmatch(rel_str, pattern):
-            return True
-    return False
+        # Ensure pattern is not empty before matching
+        if pattern and (fnmatch(rel_str, pattern) or fnmatch(filename, pattern)):
+            return True # Match found
+    return False # No ignore pattern matched

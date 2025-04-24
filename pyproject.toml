@@ -37,6 +37,7 @@ uvicorn = "^0.34.2"
 tomli = { version = "*", python = "<3.11" } # Required for Python < 3.11 to parse TOML
 poetry-dynamic-versioning = "^1.7.1"
 typing-extensions = "^4.13.2"
+httpcore = ">=1.0.0,<2.0.0"
 
 [tool.poetry.group.dev.dependencies]
 black = "*"
@@ -47,7 +48,7 @@ pytest = "*"
 pytest-asyncio = "*"
 
 [tool.poetry.scripts]
-gitingest = "gitingest.cli:main"
+codeingest = "CodeIngest.cli:main"
 
 [build-system]
 requires = ["poetry-core>=1.0.0", "poetry-dynamic-versioning>=1.0.0,<2.0.0"]
