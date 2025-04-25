@@ -1,7 +1,9 @@
 """This module contains the FastAPI router for downloading a digest file."""
 
-from fastapi import APIRouter, HTTPException
-from fastapi.responses import Response
+from pathlib import Path
+from typing import Optional # Import Optional
+from fastapi import APIRouter, HTTPException, Query # Import Query
+from fastapi.responses import FileResponse
 
 from CodeIngest.config import TMP_BASE_PATH
 
@@ -9,53 +11,60 @@ router = APIRouter()
 
 
 @router.get("/download/{digest_id}")
-async def download_ingest(digest_id: str) -> Response:
+async def download_ingest(
+    digest_id: str,
+    # --- Add filename query parameter ---
+    filename: Optional[str] = Query(None, description="Desired filename for the download.")
+) -> FileResponse:
     """
-    Download a .txt file associated with a given digest ID.
+    Download the 'digest.txt' file associated with a given digest ID,
+    allowing the client to suggest a download filename via query parameter.
 
-    This function searches for a `.txt` file in a directory corresponding to the provided
-    digest ID. If a file is found, it is read and returned as a downloadable attachment.
-    If no `.txt` file is found, an error is raised.
+    Searches for 'digest.txt' within the temporary directory corresponding
+    to the digest ID.
 
     Parameters
     ----------
     digest_id : str
-        The unique identifier for the digest. It is used to find the corresponding directory
-        and locate the .txt file within that directory.
+        The unique identifier for the digest, corresponding to a directory
+        under TMP_BASE_PATH.
+    filename : str, optional
+        The desired filename for the downloaded file, passed as a query parameter.
+        Defaults to 'digest.txt' if not provided or invalid.
 
     Returns
     -------
-    Response
-        A FastAPI Response object containing the content of the found `.txt` file. The file is
-        sent with the appropriate media type (`text/plain`) and the correct `Content-Disposition`
-        header to prompt a file download.
+    FileResponse
+        A FastAPI FileResponse object streaming the content of 'digest.txt'.
+        The file is sent with the media type 'text/plain' and prompts a download
+        using the provided or default filename.
 
     Raises
     ------
     HTTPException
-        If the digest directory is not found or if no `.txt` file exists in the directory.
+        If the digest directory or the 'digest.txt' file within it is not found.
     """
+    # Construct the path to the *actual* saved file
     directory = TMP_BASE_PATH / digest_id
+    internal_filename = "digest.txt" # The file is always saved with this name
+    digest_file_path = directory / internal_filename
 
-    try:
-        if not directory.exists():
-            raise FileNotFoundError("Directory not found")
+    # Check if the directory and the file exist
+    if not directory.is_dir() or not digest_file_path.is_file():
+        raise HTTPException(status_code=404, detail="Digest file not found.")
 
-        txt_files = [f for f in directory.iterdir() if f.suffix == ".txt"]
-        if not txt_files:
-            raise FileNotFoundError("No .txt file found")
+    # --- Determine the filename for the Content-Disposition header ---
+    # Use the provided filename if it's valid, otherwise default
+    # Basic validation: ensure it's not empty and looks like a .txt file
+    if filename and filename.lower().endswith(".txt") and len(filename) > 4:
+         effective_download_filename = filename
+    else:
+         effective_download_filename = "digest.txt" # Default download name
 
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail="Digest not found") from exc
-
-    # Find the first .txt file in the directory
-    first_file = txt_files[0]
-
-    with first_file.open(encoding="utf-8") as f:
-        content = f.read()
-
-    return Response(
-        content=content,
+    # Use FileResponse to efficiently send the file
+    return FileResponse(
+        path=digest_file_path,
         media_type="text/plain",
-        headers={"Content-Disposition": f"attachment; filename={first_file.name}"},
+        # --- Use the determined filename for download prompt ---
+        filename=effective_download_filename
     )

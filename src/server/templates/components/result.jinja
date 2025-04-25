@@ -2,12 +2,15 @@
     function getFileName(line) {
         // Skips "|", "└", "├" found in file tree
         const index = line.search(/[a-zA-Z0-9]/);
-        return line.substring(index).trim();
+        // Handle cases where line might not have expected characters
+        return index !== -1 ? line.substring(index).trim() : line.trim();
     }
 
     function toggleFile(element) {
         const patternInput = document.getElementById("pattern");
-        const patternFiles = patternInput.value ? patternInput.value.split(",").map(item => item.trim()) : [];
+        if (!patternInput) return; // Guard against missing element
+
+        const patternFiles = patternInput.value ? patternInput.value.split(",").map(item => item.trim()).filter(Boolean) : [];
 
         if (element.textContent.includes("Directory structure:")) {
             return;
@@ -17,15 +20,18 @@
         element.classList.toggle('text-gray-500');
 
         const fileName = getFileName(element.textContent);
+        if (!fileName) return; // Don't process empty filenames
+
         const fileIndex = patternFiles.indexOf(fileName);
 
         if (fileIndex !== -1) {
-            patternFiles.splice(fileIndex, 1);
+            patternFiles.splice(fileIndex, 1); // Remove if exists
         } else {
-            patternFiles.push(fileName);
+            patternFiles.push(fileName); // Add if doesn't exist
         }
 
-        patternInput.value = patternFiles.join(", ");
+        // Update input, joining with ', ' and filtering empty strings again
+        patternInput.value = patternFiles.filter(Boolean).join(", ");
     }
 </script>
 {% if result %}
@@ -33,9 +39,7 @@
         <div class="relative">
             <div class="w-full h-full absolute inset-0 bg-gray-900 rounded-xl translate-y-2 translate-x-2"></div>
             <div class="bg-[#fafafa] rounded-xl border-[3px] border-gray-900 p-6 relative z-20 space-y-6">
-                <!-- Summary and Directory Structure -->
                 <div class="grid grid-cols-1 md:grid-cols-12 gap-6">
-                    <!-- Summary Column -->
                     <div class="md:col-span-5">
                         <div class="flex justify-between items-center mb-4 py-2">
                             <h3 class="text-lg font-bold text-gray-900">Summary</h3>
@@ -45,10 +49,12 @@
                             <textarea class="w-full h-[160px] p-4 bg-[#fff4da] border-[3px] border-gray-900 rounded font-mono text-sm resize-none focus:outline-none relative z-10"
                                       readonly>{{ summary }}</textarea>
                         </div>
-                        {% if ingest_id %}
+                        {# --- Updated Download Link --- #}
+                        {% if ingest_id and encoded_download_filename %}
                             <div class="relative mt-4 inline-block group">
                                 <div class="w-full h-full rounded bg-gray-900 translate-y-1 translate-x-1 absolute inset-0"></div>
-                                <a href="/download/{{ ingest_id }}"
+                                {# Add filename query parameter, using the encoded version #}
+                                <a href="/download/{{ ingest_id }}?filename={{ encoded_download_filename }}"
                                    class="inline-flex items-center px-4 py-2 bg-[#ffc480] border-[3px] border-gray-900 text-gray-900 rounded group-hover:-translate-y-px group-hover:-translate-x-px transition-transform relative z-10">
                                     <svg class="w-4 h-4 mr-2"
                                          fill="none"
@@ -59,6 +65,7 @@
                                     Download
                                 </a>
                             </div>
+                            {# --- End Updated Download Link --- #}
                             <div class="relative mt-4 inline-block group ml-4">
                                 <div class="w-full h-full rounded bg-gray-900 translate-y-1 translate-x-1 absolute inset-0"></div>
                                 <button onclick="copyFullDigest()"
@@ -74,7 +81,6 @@
                             </div>
                         {% endif %}
                     </div>
-                    <!-- Directory Structure Column -->
                     <div class="md:col-span-7">
                         <div class="flex justify-between items-center mb-4">
                             <h3 class="text-lg font-bold text-gray-900">Directory Structure</h3>
@@ -104,7 +110,6 @@
                         </div>
                     </div>
                 </div>
-                <!-- Full Digest -->
                 <div>
                     <div class="flex justify-between items-center mb-4">
                         <h3 class="text-lg font-bold text-gray-900">Files Content</h3>
@@ -130,3 +135,4 @@
         </div>
     </div>
 {% endif %}
+
