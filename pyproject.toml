@@ -46,6 +46,7 @@ pre-commit = "*"
 pylint = "*"
 pytest = "*"
 pytest-asyncio = "*"
+pytest-cov = "*"
 
 [tool.poetry.scripts]
 codeingest = "CodeIngest.cli:main"
@@ -98,7 +99,27 @@ pythonpath = ["src"]
 testpaths = ["tests/"]
 python_files = "test_*.py"
 asyncio_mode = "auto"
-
-# asyncio_default_fixture_loop_scope = "function" # Note: This might be deprecated/unnecessary depending on pytest-asyncio version
+asyncio_default_fixture_loop_scope = "function"
 python_classes = "Test*"
 python_functions = "test_*"
+addopts = "--cov=src/CodeIngest --cov-report=term-missing --cov-report=xml" # Add coverage flags
+
+# --- ADD Coverage Configuration ---
+[tool.coverage.run]
+source = ["CodeIngest"] # Specify the package(s) to measure by import name
+branch = true          # Enable branch coverage
+
+[tool.coverage.paths]
+source = [
+    "src",              # Tell coverage that the source code is located in 'src'
+    ".venv/lib/python*/site-packages", # Also check site-packages in venv
+    ]
+
+[tool.coverage.report]
+show_missing = true     # Show line numbers of missing lines in terminal report
+skip_covered = true     # Skip reporting on files with 100% coverage in terminal
+# fail_under = 80       # Optional: uncomment to fail build if coverage is below 80%
+
+[tool.coverage.html]
+directory = "coverage_html_report" # Optional: specify directory for HTML report
+

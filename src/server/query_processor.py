@@ -1,8 +1,10 @@
 """Process a query by parsing input, cloning a repository, and generating a summary."""
 
+import os
 import shutil # Added for potential cleanup if needed later
 from functools import partial
-# from pathlib import Path # Added for path operations if needed later
+from typing import Optional
+from pathlib import Path # Added for path operations if needed later
 
 from fastapi import Request
 from starlette.templating import _TemplateResponse
@@ -26,8 +28,9 @@ async def process_query(
     """
     Process a query by parsing input, potentially cloning a repository, and generating a summary.
 
-    Handle user input (URL or local path), process Git repository data or local directory, and prepare
-    a response for rendering a template with the processed results or an error message.
+    Handle user input (URL or local path), process Git repository data or local directory, save
+    the result to a temporary file, and prepare a response for rendering a template with the
+    processed results or an error message.
 
     Parameters
     ----------
@@ -68,6 +71,7 @@ async def process_query(
     max_file_size = log_slider_to_size(slider_position)
     repo_cloned = False # Track if we cloned a repo temporarily
     query: Optional[IngestionQuery] = None # Initialize query
+    temp_digest_dir: Optional[Path] = None # Track the directory created
 
     context = {
         "request": request,
@@ -95,21 +99,32 @@ async def process_query(
             clone_config = query.extract_clone_config()
             await clone_repo(clone_config)
             repo_cloned = True # Mark that we created a temporary clone
-            # Ingest from the temporary clone path
-            summary, tree, content = ingest_query(query)
-            # Optionally save the digest file in the temp clone dir
-            digest_path = query.local_path.parent / f"{query.slug}.txt"
-            with open(digest_path, "w", encoding="utf-8") as f:
-                 f.write(tree + "\n" + content)
-
+            # The temporary directory is query.local_path.parent
+            temp_digest_dir = query.local_path.parent
         else:
-            # It's a local path, ingest directly
-            # SECURITY: query.local_path comes directly from user input here.
-            # No temporary directory is used or cleaned up.
-            summary, tree, content = ingest_query(query)
-            # Local paths don't have a temporary digest file created by default here.
-            # The 'ingest_id' might be less meaningful as it doesn't map to a temp downloadable file.
-            # We'll still pass the query.id, but download won't work unless ingest() created a file.
+            # It's a local path. Create a temporary directory for its digest.
+            # Use the same structure as cloning for consistency with download/cleanup.
+            temp_digest_dir = TMP_BASE_PATH / query.id
+            os.makedirs(temp_digest_dir, exist_ok=True) # Create the directory
+
+        # --- Ingestion ---
+        # Ingest the content from the local path (original or temporary clone)
+        summary, tree, content = ingest_query(query)
+
+        # --- Save Digest File ---
+        # Always save the digest to a file in the temporary directory
+        if temp_digest_dir:
+            # Use a consistent filename like 'digest.txt'
+            digest_filename = "digest.txt"
+            digest_path = temp_digest_dir / digest_filename
+            try:
+                with open(digest_path, "w", encoding="utf-8") as f:
+                    f.write(tree + "\n" + content)
+            except OSError as e:
+                 # Handle potential errors writing the file
+                 print(f"Error writing digest file {digest_path}: {e}")
+                 # Decide if this should be a fatal error or just prevent download
+                 query.id = None # Invalidate ID if file couldn't be written
 
 
     except Exception as exc:
@@ -130,13 +145,17 @@ async def process_query(
              context["error_message"] = f"Error: Invalid pattern provided. {exc}"
         # Add more specific error handling as needed
 
+        # Set result to False explicitly on error to avoid showing results section
+        context["result"] = False
         return template_response(context=context)
 
     finally:
-         # --- Cleanup ---
-         # Clean up the temporary directory ONLY if a remote repository was cloned
+         # --- Cleanup for Cloned Repos ---
+         # Clean up the temporary clone directory ONLY if a remote repository was cloned
          if repo_cloned and query and query.local_path.is_relative_to(TMP_BASE_PATH):
-             shutil.rmtree(query.local_path.parent, ignore_errors=True) # Remove the parent ID folder
+             # Remove the actual cloned repo subdir, leave the parent ID dir for the digest
+             shutil.rmtree(query.local_path, ignore_errors=True)
+             # The parent dir (TMP_BASE_PATH / query.id) with digest.txt will be cleaned by the background task
 
 
     # --- Success ---
@@ -144,7 +163,7 @@ async def process_query(
     if len(content) > MAX_DISPLAY_SIZE:
         content = (
             f"(Files content cropped to {int(MAX_DISPLAY_SIZE / 1_000)}k characters. "
-            f"Download full ingest if available, or run CLI for full content)\n" + content[:MAX_DISPLAY_SIZE]
+            f"Download full ingest to see more)\n" + content[:MAX_DISPLAY_SIZE]
         )
 
     _print_success(
@@ -161,8 +180,9 @@ async def process_query(
             "summary": summary,
             "tree": tree,
             "content": content,
-            "ingest_id": query.id if repo_cloned else None, # Only provide ID if a downloadable file exists
-            "is_local_path": not query.url # Add flag for template logic
+            # --- FIX: Always pass the query ID ---
+            "ingest_id": query.id,
+            "is_local_path": not query.url # Add flag for template logic (optional)
         }
     )
 

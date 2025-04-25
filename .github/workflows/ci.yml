@@ -16,7 +16,7 @@ jobs:
       fail-fast: true
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        python-version: ["3.8", "3.9", "3.10", "3.11", "3.12", "3.13"]
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
 
     steps:
     - uses: actions/checkout@v4
@@ -26,24 +26,32 @@ jobs:
       with:
         python-version: ${{ matrix.python-version }}
 
-    - name: Cache pip
+    # Install Poetry separately (if not using setup-python's caching)
+    - name: Install Poetry
+      uses: snok/install-poetry@v1
+      with:
+        virtualenvs-create: true
+        virtualenvs-in-project: true # Match your poetry.toml
+
+    - name: Load cached venv
+      id: cached-poetry-dependencies
       uses: actions/cache@v4
       with:
-        path: ~/.cache/pip
-        key: ${{ runner.os }}-pip-${{ hashFiles('**/*requirements*.txt') }}
+        path: .venv # Cache the virtual environment directory
+        key: venv-${{ runner.os }}-${{ matrix.python-version }}-${{ hashFiles('**/poetry.lock') }}
         restore-keys: |
-          ${{ runner.os }}-pip-
+           venv-${{ runner.os }}-${{ matrix.python-version }}-
 
     - name: Install dependencies
       run: |
         poetry install --with dev
 
-    - name: Run tests
+    - name: Run tests with coverage
       run: |
-        pytest
+        poetry run pytest
 
     #  Run pre-commit only on Python 3.13 + ubuntu.
     - name: Run pre-commit hooks
       if: ${{ matrix.python-version == '3.13' && matrix.os == 'ubuntu-latest' }}
       run: |
-        pre-commit run --all-files
+        poetry run pre-commit run --all-files

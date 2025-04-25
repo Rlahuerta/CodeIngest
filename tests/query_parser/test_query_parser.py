@@ -489,4 +489,3 @@ async def test_parse_repo_source_with_failed_git_command():
 
             assert query.branch == expected_branch
             assert query.subpath == expected_subpath
-
