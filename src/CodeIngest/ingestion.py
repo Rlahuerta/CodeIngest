@@ -3,6 +3,7 @@
 import warnings
 from pathlib import Path
 from typing import Tuple
+import sys # Import sys for stderr
 
 from CodeIngest.config import MAX_DIRECTORY_DEPTH, MAX_FILES, MAX_TOTAL_SIZE_BYTES
 from CodeIngest.output_formatters import format_node
@@ -198,6 +199,9 @@ def apply_gitingest_file(path: Path, query: IngestionQuery) -> None:
     return
 
 
+# Flag to print header only once for _process_node debug
+_process_node_debug_header_printed = False
+
 def _process_node(
     node: FileSystemNode,
     query: IngestionQuery,
@@ -218,7 +222,19 @@ def _process_node(
     base_path_for_rel : Path
         The base path to calculate relative paths from (repo root or user-provided dir).
     """
+    global _process_node_debug_header_printed
+    if not _process_node_debug_header_printed:
+        print("\n--- [DEBUG PROCESS_NODE START] ---", file=sys.stderr)
+        _process_node_debug_header_printed = True
+
+    print(f"[DEBUG PROCESS_NODE] Processing directory: {node.path}", file=sys.stderr)
+    print(f"[DEBUG PROCESS_NODE] Current depth: {node.depth}", file=sys.stderr)
+    print(f"[DEBUG PROCESS_NODE] Include patterns: {query.include_patterns}", file=sys.stderr)
+    print(f"[DEBUG PROCESS_NODE] Ignore patterns: {query.ignore_patterns}", file=sys.stderr)
+
+
     if limit_exceeded(stats, node.depth):
+        print(f"[DEBUG PROCESS_NODE] Limit exceeded for {node.path}. Skipping.", file=sys.stderr)
         return
 
     # Iterate through items in the current directory node's path
@@ -226,35 +242,49 @@ def _process_node(
         # Check if path exists and is a directory before iterating
         if not node.path.is_dir():
              warnings.warn(f"Attempted to iterate non-directory: {node.path}", UserWarning)
+             print(f"[DEBUG PROCESS_NODE] Path is not a directory: {node.path}. Skipping.", file=sys.stderr)
              return
-        iterator = node.path.iterdir()
+        iterator = list(node.path.iterdir()) # Convert to list to iterate multiple times if needed for debug
+        print(f"[DEBUG PROCESS_NODE] Found {len(iterator)} items in {node.path}", file=sys.stderr)
     except OSError as e:
          warnings.warn(f"Cannot access directory {node.path}: {e}", UserWarning)
+         print(f"[DEBUG PROCESS_NODE] Cannot access directory {node.path}: {e}. Skipping.", file=sys.stderr)
          return # Skip this directory if not accessible
 
     for sub_path in iterator:
+        print(f"[DEBUG PROCESS_NODE] Checking item: {sub_path}", file=sys.stderr)
 
         # --- Exclusion Check (Applied first to both files and dirs) ---
         # Use the consistent base_path_for_rel for checking patterns
         if query.ignore_patterns and _should_exclude(sub_path, base_path_for_rel, query.ignore_patterns):
+            print(f"[DEBUG PROCESS_NODE] Item excluded by ignore patterns: {sub_path}. Skipping.", file=sys.stderr)
             continue # Skip if excluded by ignore patterns
 
         # --- Process based on type ---
         if sub_path.is_symlink():
+            print(f"[DEBUG PROCESS_NODE] Processing symlink: {sub_path}", file=sys.stderr)
             # Apply include check only if include patterns exist
             if query.include_patterns and not _should_include(sub_path, base_path_for_rel, query.include_patterns):
+                print(f"[DEBUG PROCESS_NODE] Symlink excluded by include patterns: {sub_path}. Skipping.", file=sys.stderr)
                 continue # Skip symlink if include patterns exist and it doesn't match
             _process_symlink(path=sub_path, parent_node=node, stats=stats, local_path=base_path_for_rel)
+            print(f"[DEBUG PROCESS_NODE] Symlink processed: {sub_path}", file=sys.stderr)
+
 
         elif sub_path.is_file():
+            print(f"[DEBUG PROCESS_NODE] Processing file: {sub_path}", file=sys.stderr)
             # Apply include check only if include patterns exist
             if query.include_patterns and not _should_include(sub_path, base_path_for_rel, query.include_patterns):
+                print(f"[DEBUG PROCESS_NODE] File excluded by include patterns: {sub_path}. Skipping.", file=sys.stderr)
                 continue # Skip file if include patterns exist and it doesn't match
 
             # If not skipped by exclude or include, process the file
             _process_file(path=sub_path, parent_node=node, stats=stats, local_path=base_path_for_rel, max_file_size=query.max_file_size)
+            print(f"[DEBUG PROCESS_NODE] File processed: {sub_path}", file=sys.stderr)
+
 
         elif sub_path.is_dir():
+            print(f"[DEBUG PROCESS_NODE] Processing directory: {sub_path}", file=sys.stderr)
             # No include check here for the directory itself.
             # We always recurse into non-excluded directories.
             # The include check will happen for files *within* this directory during recursion.
@@ -282,13 +312,18 @@ def _process_node(
                 node.size += child_directory_node.size
                 node.file_count += child_directory_node.file_count
                 node.dir_count += 1 + child_directory_node.dir_count
+                print(f"[DEBUG PROCESS_NODE] Added directory to parent: {sub_path}", file=sys.stderr)
+            else:
+                 print(f"[DEBUG PROCESS_NODE] Directory has no included content: {sub_path}. Skipping adding to parent.", file=sys.stderr)
         else:
             # Handle other potential file types if necessary, or warn
             warnings.warn(f"Skipping unknown file type: {sub_path}", UserWarning)
+            print(f"[DEBUG PROCESS_NODE] Skipping unknown file type: {sub_path}", file=sys.stderr)
 
 
     # Sort children after processing all items in the current directory
     node.sort_children()
+    print(f"[DEBUG PROCESS_NODE] Finished processing directory: {node.path}", file=sys.stderr)
 
 
 def _process_symlink(path: Path, parent_node: FileSystemNode, stats: FileSystemStats, local_path: Path) -> None:
@@ -306,6 +341,7 @@ def _process_symlink(path: Path, parent_node: FileSystemNode, stats: FileSystemS
     local_path : Path
         The base path for calculating the relative path string.
     """
+    print(f"[DEBUG PROCESS_SYMLINK] Processing symlink: {path}", file=sys.stderr)
     # Basic symlink handling: add to tree, count as a file-like entry for limits.
     # Does not follow the link or add its target's size/content by default.
     try:
@@ -320,8 +356,10 @@ def _process_symlink(path: Path, parent_node: FileSystemNode, stats: FileSystemS
         stats.total_files += 1
         parent_node.children.append(child)
         parent_node.file_count += 1 # Count symlink as a file entry in the parent
+        print(f"[DEBUG PROCESS_SYMLINK] Added symlink node: {path.name}", file=sys.stderr)
     except Exception as e:
          warnings.warn(f"Failed to process symlink {path}: {e}", UserWarning)
+         print(f"[DEBUG PROCESS_SYMLINK] Failed to process symlink {path}: {e}", file=sys.stderr)
 
 
 def _process_file(path: Path, parent_node: FileSystemNode, stats: FileSystemStats, local_path: Path, max_file_size: int) -> None:
@@ -341,23 +379,29 @@ def _process_file(path: Path, parent_node: FileSystemNode, stats: FileSystemStat
     max_file_size : int
         The maximum allowed size for individual files.
     """
+    print(f"[DEBUG PROCESS_FILE] Processing file: {path}", file=sys.stderr)
     try:
         file_size = path.stat().st_size
+        print(f"[DEBUG PROCESS_FILE] File size: {file_size}", file=sys.stderr)
     except OSError as e:
         warnings.warn(f"Could not stat file {path}: {e}", UserWarning)
+        print(f"[DEBUG PROCESS_FILE] Could not stat file {path}: {e}. Skipping.", file=sys.stderr)
         return # Skip file if cannot get stats
 
     # Check individual file size limit
     if file_size > max_file_size:
          warnings.warn(f"Skipping file {path.name} ({file_size} bytes): exceeds max file size ({max_file_size} bytes).", UserWarning)
+         print(f"[DEBUG PROCESS_FILE] File exceeds max file size. Skipping: {path}", file=sys.stderr)
          return
 
     # Check overall total size limit
     if stats.total_size + file_size > MAX_TOTAL_SIZE_BYTES:
         warnings.warn(f"Skipping file {path.name}: adding it would exceed total size limit.", UserWarning)
+        print(f"[DEBUG PROCESS_FILE] Adding file would exceed total size limit. Skipping: {path}", file=sys.stderr)
         stats.total_files += 1 # Increment count even if skipped due to size for limit tracking
         if stats.total_files >= MAX_FILES:
              print(f"Maximum file limit ({MAX_FILES}) reached while checking size.")
+             print(f"[DEBUG PROCESS_FILE] Maximum file limit ({MAX_FILES}) reached while checking size.", file=sys.stderr)
         return # Stop processing this file
 
     # Check total file count limit
@@ -365,12 +409,16 @@ def _process_file(path: Path, parent_node: FileSystemNode, stats: FileSystemStat
         # Check if we already printed the warning
         if stats.total_files == MAX_FILES: # Print only once when limit is first hit
              print(f"Maximum file limit ({MAX_FILES}) reached. Skipping further files.")
+             print(f"[DEBUG PROCESS_FILE] Maximum file limit ({MAX_FILES}) reached. Skipping further files.", file=sys.stderr)
         stats.total_files += 1 # Increment anyway to know how many were skipped
+        print(f"[DEBUG PROCESS_FILE] Total file count limit reached. Skipping: {path}", file=sys.stderr)
         return # Stop processing this file
 
     # --- If limits are okay, process the file ---
     stats.total_files += 1
     stats.total_size += file_size
+    print(f"[DEBUG PROCESS_FILE] File passed limits. Total files: {stats.total_files}, Total size: {stats.total_size}", file=sys.stderr)
+
 
     child = FileSystemNode(
         name=path.name,
@@ -387,6 +435,7 @@ def _process_file(path: Path, parent_node: FileSystemNode, stats: FileSystemStat
     # Aggregate stats up to the parent
     parent_node.size += file_size
     parent_node.file_count += 1
+    print(f"[DEBUG PROCESS_FILE] Added file node to parent: {path.name}", file=sys.stderr)
 
 
 def limit_exceeded(stats: FileSystemStats, depth: int) -> bool:
@@ -409,6 +458,7 @@ def limit_exceeded(stats: FileSystemStats, depth: int) -> bool:
         # Avoid printing repeatedly deep in recursion
         if depth == MAX_DIRECTORY_DEPTH + 1:
             print(f"Maximum depth limit ({MAX_DIRECTORY_DEPTH}) reached. Stopping recursion deeper.")
+            print(f"[DEBUG LIMIT_EXCEEDED] Depth limit reached ({MAX_DIRECTORY_DEPTH}).", file=sys.stderr)
         return True
 
     # Check file count limit (Use >= MAX_FILES because we check *before* processing the potential MAX_FILES+1 item)
@@ -417,12 +467,14 @@ def limit_exceeded(stats: FileSystemStats, depth: int) -> bool:
         # This check might be redundant if _process_file also handles it, but good for directories
         # We need a way to track if the warning was already printed. Add a flag to stats?
         # For now, rely on the print in _process_file.
+        print(f"[DEBUG LIMIT_EXCEEDED] File count limit reached ({MAX_FILES}).", file=sys.stderr)
         return True
 
     # Check total size limit
     if stats.total_size >= MAX_TOTAL_SIZE_BYTES:
         # Similar printing logic needed if we want to avoid spamming the console.
         # Relying on print in _process_file for now.
+        print(f"[DEBUG LIMIT_EXCEEDED] Total size limit reached ({MAX_TOTAL_SIZE_BYTES}).", file=sys.stderr)
         return True
 
     return False # No limits exceeded

@@ -7,6 +7,7 @@ import sys # Import sys for stderr
 
 # Flag to print header only once
 _exclude_debug_header_printed = False
+_include_debug_header_printed = False # Add header for include debug
 
 def _should_include(path: Path, base_path: Path, include_patterns: Set[str]) -> bool:
     """
@@ -28,24 +29,36 @@ def _should_include(path: Path, base_path: Path, include_patterns: Set[str]) -> 
     bool
         `True` if the path or filename matches any include patterns, `False` otherwise.
     """
+    global _include_debug_header_printed
+    if not _include_debug_header_printed:
+        print("\n--- [DEBUG INCLUDE START] ---", file=sys.stderr)
+        _include_debug_header_printed = True
+
     try:
         rel_path = path.relative_to(base_path)
     except ValueError:
         # If path is not under base_path at all
+        print(f"[DEBUG INCLUDE] Path '{path}' not relative to base '{base_path}'. Assuming not included.", file=sys.stderr)
         return False
 
     rel_str = str(rel_path)
     filename = path.name # Get just the filename
 
+    print(f"[DEBUG INCLUDE] Checking: Path='{rel_str}', Filename='{filename}' against patterns: {include_patterns}", file=sys.stderr)
+
     # Check if the pattern matches the full relative path OR just the filename
     for pattern in include_patterns:
-        if fnmatch(rel_str, pattern) or fnmatch(filename, pattern):
-            # Optional: Add debug print for includes if needed
-            # print(f"[DEBUG INCLUDE] Match: '{pattern}' matched '{rel_str}' or '{filename}'", file=sys.stderr)
+        if not pattern: # Skip empty patterns
+            continue
+
+        match_rel = fnmatch(rel_str, pattern)
+        match_file = fnmatch(filename, pattern)
+
+        if match_rel or match_file:
+            print(f"[DEBUG INCLUDE] Match Found! Pattern='{pattern}' matched Path='{rel_str}' ({match_rel}) or Filename='{filename}' ({match_file}). Including.", file=sys.stderr)
             return True # Match found
 
-    # Optional: Add debug print for non-matches if needed
-    # print(f"[DEBUG INCLUDE] No Match: '{rel_str}' or '{filename}' did not match {include_patterns}", file=sys.stderr)
+    print(f"[DEBUG INCLUDE] No Match: Path='{rel_str}', Filename='{filename}' did not match any include patterns. Excluding.", file=sys.stderr)
     return False # No include pattern matched
 
 
@@ -85,9 +98,8 @@ def _should_exclude(path: Path, base_path: Path, ignore_patterns: Set[str]) -> b
     filename = path.name # Get just the filename
 
     # --- Debug Print ---
-    # Print only for potentially interesting paths like .github or docs
-    if ".github" in rel_str or "docs" in rel_str or "publish.yml" in filename:
-         print(f"[DEBUG EXCLUDE] Checking: Path='{rel_str}', Filename='{filename}'", file=sys.stderr)
+    # Print check for every item
+    print(f"[DEBUG EXCLUDE] Checking: Path='{rel_str}', Filename='{filename}' against patterns: {ignore_patterns}", file=sys.stderr)
     # --- End Debug Print ---
 
     # Check if the pattern matches the full relative path OR just the filename
@@ -107,8 +119,7 @@ def _should_exclude(path: Path, base_path: Path, ignore_patterns: Set[str]) -> b
 
     # --- Debug Print ---
     # If no pattern matched, print for the interesting paths
-    if ".github" in rel_str or "docs" in rel_str or "publish.yml" in filename:
-        print(f"[DEBUG EXCLUDE] No Match: Path='{rel_str}', Filename='{filename}'. Including.", file=sys.stderr)
+    print(f"[DEBUG EXCLUDE] No Match: Path='{rel_str}', Filename='{filename}'. Including.", file=sys.stderr)
     # --- End Debug Print ---
 
     return False # No ignore pattern matched
