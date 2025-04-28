@@ -35,6 +35,8 @@ async def home(request: Request) -> HTMLResponse:
             "request": request,
             "examples": EXAMPLE_REPOS,
             "default_file_size": 243,
+            # Initialize branch_or_tag for the template context on GET
+            "branch_or_tag": "",
         },
     )
 
@@ -47,38 +49,43 @@ async def index_post(
     max_file_size: int = Form(...),
     pattern_type: str = Form(...),
     pattern: str = Form(...),
+    # --- Added branch_or_tag parameter ---
+    branch_or_tag: str = Form(""), # Add new form field, default to empty string
 ) -> HTMLResponse:
     """
     Process the form submission with user input for query parameters.
 
     This endpoint handles POST requests from the home page form. It processes the user-submitted
-    input (e.g., text, file size, pattern type) and invokes the `process_query` function to handle
-    the query logic, returning the result as an HTML response.
+    input (e.g., text, file size, pattern type, branch/tag) and invokes the `process_query`
+    function to handle the query logic, returning the result as an HTML response.
 
     Parameters
     ----------
     request : Request
-        The incoming request object, which provides context for rendering the response.
+        The incoming request object.
     input_text : str
-        The input text provided by the user for processing, by default taken from the form.
+        The input text (URL or local path).
     max_file_size : int
-        The maximum allowed file size for the input, specified by the user.
+        The maximum allowed file size slider position.
     pattern_type : str
-        The type of pattern used for the query, specified by the user.
+        The type of pattern ('include' or 'exclude').
     pattern : str
-        The pattern string used in the query, specified by the user.
+        The pattern string.
+    branch_or_tag : str
+        The specific branch, tag, or commit hash provided by the user (optional).
 
     Returns
     -------
     HTMLResponse
-        An HTML response containing the results of processing the form input and query logic,
-        which will be rendered and returned to the user.
+        The rendered results page or the form with an error message.
     """
+    # --- Pass branch_or_tag to process_query ---
     return await process_query(
-        request,
-        input_text,
-        max_file_size,
-        pattern_type,
-        pattern,
+        request=request,
+        input_text=input_text,
+        slider_position=max_file_size, # Pass slider position
+        pattern_type=pattern_type,
+        pattern=pattern,
+        branch_or_tag=branch_or_tag, # Pass the branch/tag
         is_index=True,
     )

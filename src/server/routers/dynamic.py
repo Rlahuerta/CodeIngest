@@ -31,6 +31,9 @@ async def catch_all(request: Request, full_path: str) -> HTMLResponse:
         An HTML response containing the rendered template, with the Git URL
         and other default parameters such as loading state and file size.
     """
+    # Note: Branch/tag cannot be easily pre-filled from GET request path here
+    # without more complex parsing logic separate from the core parsing.
+    # It will be empty on initial load via GET.
     return templates.TemplateResponse(
         "git.jinja",
         {
@@ -38,6 +41,7 @@ async def catch_all(request: Request, full_path: str) -> HTMLResponse:
             "repo_url": full_path,
             "loading": True,
             "default_file_size": 243,
+            "branch_or_tag": "", # Initialize as empty for GET request
         },
     )
 
@@ -50,37 +54,41 @@ async def process_catch_all(
     max_file_size: int = Form(...),
     pattern_type: str = Form(...),
     pattern: str = Form(...),
+    branch_or_tag: str = Form(""), # Add new form field, default to empty string
 ) -> HTMLResponse:
     """
     Process the form submission with user input for query parameters.
 
-    This endpoint handles POST requests, processes the input parameters (e.g., text, file size, pattern),
+    This endpoint handles POST requests, processes the input parameters (e.g., text, file size, pattern, branch/tag),
     and calls the `process_query` function to handle the query logic, returning the result as an HTML response.
 
     Parameters
     ----------
     request : Request
-        The incoming request object, which provides context for rendering the response.
+        The incoming request object.
     input_text : str
-        The input text provided by the user for processing, by default taken from the form.
+        The input text (URL or local path).
     max_file_size : int
-        The maximum allowed file size for the input, specified by the user.
+        The maximum allowed file size slider position.
     pattern_type : str
-        The type of pattern used for the query, specified by the user.
+        The type of pattern ('include' or 'exclude').
     pattern : str
-        The pattern string used in the query, specified by the user.
+        The pattern string.
+    branch_or_tag : str
+        The specific branch, tag, or commit hash provided by the user (optional).
 
     Returns
     -------
     HTMLResponse
-        An HTML response generated after processing the form input and query logic,
-        which will be rendered and returned to the user.
+        The rendered results page or the form with an error message.
     """
+    # --- FIX: Pass branch_or_tag to process_query ---
     return await process_query(
-        request,
-        input_text,
-        max_file_size,
-        pattern_type,
-        pattern,
+        request=request,
+        input_text=input_text,
+        slider_position=max_file_size, # Pass slider position
+        pattern_type=pattern_type,
+        pattern=pattern,
+        branch_or_tag=branch_or_tag, # Pass the branch/tag
         is_index=False,
     )

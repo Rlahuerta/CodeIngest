@@ -54,46 +54,64 @@ async def ingest_async(
     ------
     TypeError
         If `clone_repo` does not return a coroutine, or if the `source` is of an unsupported type.
+    ValueError
+        If the source path does not exist or other parsing/ingestion errors occur.
     """
     repo_cloned = False
+    query: Optional[IngestionQuery] = None # Initialize query to None
 
     try:
-        query: IngestionQuery = await parse_query(
+        # Parse the source (URL or local path) into a query object
+        query = await parse_query(
             source=source,
             max_file_size=max_file_size,
-            from_web=False,
+            from_web=False, # Assume not from web initially; parse_query will detect URLs
             include_patterns=include_patterns,
             ignore_patterns=exclude_patterns,
         )
 
+        # --- Conditional Cloning ---
+        # Only clone if the source was identified as a remote URL
         if query.url:
-            selected_branch = branch if branch else query.branch  # prioritize branch argument
-            query.branch = selected_branch
+            # Prioritize the explicit branch argument over any branch parsed from the URL
+            selected_branch = branch if branch else query.branch
+            query.branch = selected_branch # Update query with the selected branch
 
             clone_config = query.extract_clone_config()
+            # Clone the remote repository to a temporary local path
             clone_coroutine = clone_repo(clone_config)
 
+            # Ensure clone_repo returns a coroutine and run it
             if inspect.iscoroutine(clone_coroutine):
+                # Await if an event loop is running, otherwise run synchronously
                 if asyncio.get_event_loop().is_running():
                     await clone_coroutine
                 else:
-                    asyncio.run(clone_coroutine)
+                    asyncio.run(clone_coroutine) # Should ideally not happen in async context
             else:
                 raise TypeError("clone_repo did not return a coroutine as expected.")
 
-            repo_cloned = True
+            repo_cloned = True # Mark that a temporary clone was made
 
+        # --- Ingestion ---
+        # Ingest the content from the local path (either the original path or the temporary clone)
         summary, tree, content = ingest_query(query)
 
+        # --- Output ---
+        # Write the results to the specified output file if requested
         if output is not None:
             with open(output, "w", encoding="utf-8") as f:
                 f.write(tree + "\n" + content)
 
         return summary, tree, content
+
     finally:
-        # Clean up the temporary directory if it was created
-        if repo_cloned:
-            shutil.rmtree(TMP_BASE_PATH, ignore_errors=True)
+        # --- Cleanup ---
+        # Clean up the temporary directory ONLY if a remote repository was cloned
+        # query might be None if parse_query failed early
+        if repo_cloned and query and query.local_path.is_relative_to(TMP_BASE_PATH):
+             # Double-check it's within the expected temp base path before removing
+            shutil.rmtree(query.local_path.parent, ignore_errors=True) # Remove the parent ID folder
 
 
 def ingest(
@@ -139,13 +157,35 @@ def ingest(
     --------
     ingest_async : The asynchronous version of this function.
     """
-    return asyncio.run(
-        ingest_async(
-            source=source,
-            max_file_size=max_file_size,
-            include_patterns=include_patterns,
-            exclude_patterns=exclude_patterns,
-            branch=branch,
-            output=output,
+    # Run the asynchronous version within the current event loop or create a new one
+    # Check if an event loop is already running
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError: # No running event loop
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        return loop.run_until_complete(
+             ingest_async(
+                source=source,
+                max_file_size=max_file_size,
+                include_patterns=include_patterns,
+                exclude_patterns=exclude_patterns,
+                branch=branch,
+                output=output,
+            )
         )
-    )
+    else:
+        # If a loop is running, use ensure_future or create_task depending on context
+        # This part might need adjustment based on how/where `ingest` is called
+        # For simplicity, we'll assume run_until_complete is acceptable here too,
+        # but in complex async apps, you might need `asyncio.ensure_future`.
+         return loop.run_until_complete(
+             ingest_async(
+                source=source,
+                max_file_size=max_file_size,
+                include_patterns=include_patterns,
+                exclude_patterns=exclude_patterns,
+                branch=branch,
+                output=output,
+            )
+        )

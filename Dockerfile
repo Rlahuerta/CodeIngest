@@ -60,11 +60,12 @@ RUN useradd -m -u 1000 appuser
 COPY src/ ./
 
 # Change ownership of the application files
-#RUN chown -R appuser:appuser $PYSETUP_PATH
+RUN chown -R appuser:appuser $PYSETUP_PATH
 
 # Switch to non-root user
-#USER appuser
+USER appuser
 EXPOSE 8000
 
-SHELL ["/bin/bash", "-c"]
+#SHELL ["/bin/bash", "-c"]
 #CMD ["python", "-m", "uvicorn", "server.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["poetry", "run", "uvicorn", "src.server.main:app", "--host", "0.0.0.0", "--port", "8000"]

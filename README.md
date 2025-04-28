@@ -1,13 +1,10 @@
-# Gitingest
+# CodeIngest
 
-[![Image](./docs/frontpage.png "Gitingest main page")](https://gitingest.com)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/Rlahuerta/CodeIngest/blob/main/LICENSE)
+[![GitHub stars](https://img.shields.io/github/stars/Rlahuerta/CodeIngest?style=social.svg)](https://github.com/Rlahuerta/CodeIngest)
 
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/cyclotruc/gitingest/blob/main/LICENSE)
-[![PyPI version](https://badge.fury.io/py/gitingest.svg)](https://badge.fury.io/py/gitingest)
-[![GitHub stars](https://img.shields.io/github/stars/cyclotruc/gitingest?style=social.svg)](https://github.com/cyclotruc/gitingest)
-[![Downloads](https://pepy.tech/badge/gitingest)](https://pepy.tech/project/gitingest)
+Turn any Git repository (remote URL or local path) into a prompt-friendly text digest for LLMs.
 
-[![Discord](https://dcbadge.limes.pink/api/server/https://discord.com/invite/zerRaGK9EC)](https://discord.com/invite/zerRaGK9EC)
 
 Turn any Git repository into a prompt-friendly text ingest for LLMs.
 
@@ -17,30 +14,34 @@ You can also replace `hub` with `ingest` in any GitHub URL to access the corresp
 
 ## 🚀 Features
 
-- **Easy code context**: Get a text digest from a Git repository URL or a directory
-- **Smart Formatting**: Optimized output format for LLM prompts
-- **Statistics about**:
-  - File and directory structure
-  - Size of the extract
-  - Token count
-- **CLI tool**: Run it as a shell command
-- **Python package**: Import it in your code
+- **Easy Code Context**: Get a text digest from a Git repository URL or a local directory path.
+- **Branch/Tag/Commit Support**: Specify a particular branch, tag, or commit hash when ingesting a remote repository URL.
+- **Smart Formatting**: Optimized output format for LLM prompts.
+- **Statistics**: Provides details on file/directory structure and estimated token count.
+- **CLI Tool**: Run `codeingest` as a shell command.
+- **Python Package**: Import `CodeIngest` in your Python code.
 
 ## 📚 Requirements
 
 - Python 3.10+
+- Git installed on your system
 
 ### 📦 Installation
 
-Gitingest is available on [PyPI](https://pypi.org/project/gitingest/).
-You can install it using `pip`:
+`CodeIngest` is intended for local use or self-hosting. If published to PyPI (not yet), you could install it via pip:
 
 ```bash
 pip install CodeIngest
 ```
 
-However, it might be a good idea to use `pipx` to install it.
-You can install `pipx` using your preferred package manager.
+## For development or local use, clone the repository and install using Poetry:
+```bash
+git clone [https://github.com/Rlahuerta/CodeIngest.git](https://github.com/Rlahuerta/CodeIngest.git)
+cd CodeIngest
+poetry install
+```
+
+Using `pipx` is also a good option for installing Python CLI tools in isolation:
 
 ```bash
 brew install pipx
@@ -60,34 +61,31 @@ pipx ensurepath
 pipx install CodeIngest
 ```
 
-## 🧩 Browser Extension Usage
-
-<!-- markdownlint-disable MD033 -->
-<a href="https://chromewebstore.google.com/detail/adfjahbijlkjfoicpjkhjicpjpjfaood" target="_blank" title="Get Gitingest Extension from Chrome Web Store"><img height="48" src="https://github.com/user-attachments/assets/20a6e44b-fd46-4e6c-8ea6-aad436035753" alt="Available in the Chrome Web Store" /></a>
-<a href="https://addons.mozilla.org/firefox/addon/gitingest" target="_blank" title="Get Gitingest Extension from Firefox Add-ons"><img height="48" src="https://github.com/user-attachments/assets/c0e99e6b-97cf-4af2-9737-099db7d3538b" alt="Get The Add-on for Firefox" /></a>
-<a href="https://microsoftedge.microsoft.com/addons/detail/nfobhllgcekbmpifkjlopfdfdmljmipf" target="_blank" title="Get Gitingest Extension from Microsoft Edge Add-ons"><img height="48" src="https://github.com/user-attachments/assets/204157eb-4cae-4c0e-b2cb-db514419fd9e" alt="Get from the Edge Add-ons" /></a>
-<!-- markdownlint-enable MD033 -->
-
-The extension is open source at [lcandy2/gitingest-extension](https://github.com/lcandy2/gitingest-extension).
-
-Issues and feature requests are welcome to the repo.
-
 ## 💡 Command line usage
 
-The `gitingest` command line tool allows you to analyze codebases and create a text dump of their contents.
+The `codeingest` command line tool allows you to analyze codebases and create a text dump of their contents.
 
 ```bash
-# Basic usage
-CodeIngest /path/to/directory
+# Ingest a local directory
+codeingest /path/to/your/local/repo
 
-# From URL
-CodeIngest https://github.com/cyclotruc/gitingest
+# Ingest the current directory
+codeingest .
+
+# Ingest from a remote URL (default branch)
+codeingest [https://github.com/tiangolo/fastapi](https://github.com/tiangolo/fastapi)
+
+# Ingest from a remote URL specifying a branch/tag/commit
+codeingest [https://github.com/pallets/flask](https://github.com/pallets/flask) -b 2.3.x
+
+# Specify output file and exclude patterns
+codeingest . -o my_digest.txt -e "*.log" -e "dist/"
 
 # See more options
-CodeIngest --help
+codeingest --help
 ```
 
-This will write the digest in a text file (default `digest.txt`) in your current working directory.
+This will write the digest in a text file (default `digest.txt` or `project_name_branch.txt`) in your current working directory.
 
 ## 🐍 Python package usage
 
@@ -95,10 +93,16 @@ This will write the digest in a text file (default `digest.txt`) in your current
 # Synchronous usage
 from CodeIngest import ingest
 
-summary, tree, content = ingest("path/to/directory")
+# Analyze a local directory
+summary, tree, content = ingest("/path/to/local/repo")
 
-# or from URL
-summary, tree, content = ingest("https://github.com/cyclotruc/gitingest")
+# Analyze from URL (default branch)
+summary_url, tree_url, content_url = ingest("[https://github.com/Rlahuerta/CodeIngest](https://github.com/Rlahuerta/CodeIngest)")
+
+# Analyze from URL with specific branch and output file
+summary_branch, _, _ = ingest("[https://github.com/pallets/flask](https://github.com/pallets/flask)", branch="2.3.x", output="flask_digest.txt")
+
+print(summary)
 ```
 
 By default, this won't write a file but can be enabled with the `output` argument.
@@ -108,22 +112,37 @@ By default, this won't write a file but can be enabled with the `output` argumen
 from CodeIngest import ingest_async
 import asyncio
 
-result = asyncio.run(ingest_async("path/to/directory"))
+async def run_analysis():
+    # Analyze local directory asynchronously
+    result_local = await ingest_async("/path/to/local/repo")
+
+    # Analyze URL asynchronously
+    result_url = await ingest_async("https://github.com/Rlahuerta/CodeIngest", branch="main")
+
+    print(result_local[0]) # Print summary
+    print(result_url[0])   # Print summary
+
+# asyncio.run(run_analysis())
 ```
 
 ### Jupyter notebook usage
 
 ```python
+# In a Jupyter cell
 from CodeIngest import ingest_async
 
-# Use await directly in Jupyter
-summary, tree, content = await ingest_async("path/to/directory")
+# Use await directly in Jupyter (which runs its own event loop)
+summary, tree, content = await ingest_async("/path/to/local/repo")
+# summary_url, _, _ = await ingest_async("https://github.com/Rlahuerta/CodeIngest", branch="main")
 
+print(summary)
 ```
 
 This is because Jupyter notebooks are asynchronous by default.
 
 ## 🐳 Self-host
+
+You can run the included FastAPI web interface locally using Docker.
 
 1. Build the image:
 
@@ -152,30 +171,21 @@ If you are hosting it on a domain, you can specify the allowed hostnames via env
    ALLOWED_HOSTS="example.com, localhost, 127.0.0.1"
    ```
 
+*Security Warning:* Enabling local path processing in the web interface is highly insecure if the server is exposed. Use only in trusted, isolated environments.
+
 ## 🤝 Contributing
 
-### Non-technical ways to contribute
+Contributions are welcome! Please refer to `CONTRIBUTING.md` for details on how to set up the development environment and submit pull requests.
 
-- **Create an Issue**: If you find a bug or have an idea for a new feature, please [create an issue](https://github.com/cyclotruc/gitingest/issues/new) on GitHub. This will help us track and prioritize your request.
-- **Spread the Word**: If you like Gitingest, please share it with your friends, colleagues, and on social media. This will help us grow the community and make Gitingest even better.
-- **Use Gitingest**: The best feedback comes from real-world usage! If you encounter any issues or have ideas for improvement, please let us know by [creating an issue](https://github.com/cyclotruc/gitingest/issues/new) on GitHub or by reaching out to us on [Discord](https://discord.com/invite/zerRaGK9EC).
-
-### Technical ways to contribute
-
-Gitingest aims to be friendly for first time contributors, with a simple Python and HTML codebase. If you need any help while working with the code, reach out to us on [Discord](https://discord.com/invite/zerRaGK9EC). For detailed instructions on how to make a pull request, see [CONTRIBUTING.md](./CONTRIBUTING.md).
+If you find a bug or have a feature request, please create an issue on GitHub.
 
 ## 🛠️ Stack
-
-- [Tailwind CSS](https://tailwindcss.com) - Frontend
 - [FastAPI](https://github.com/fastapi/fastapi) - Backend framework
-- [Jinja2](https://jinja.palletsprojects.com) - HTML templating
+- [Uvicorn](https://www.uvicorn.org/) - ASGI server
+- [Jinja2](https://jinja.palletsprojects.com/en/stable/) - HTML templating
+- [Tailwind CSS](https://tailwindcss.com/) - Frontend styling (via CDN)
+- [Click](https://click.palletsprojects.com/en/stable/) - CLI framework
 - [tiktoken](https://github.com/openai/tiktoken) - Token estimation
-- [posthog](https://github.com/PostHog/posthog) - Amazing analytics
-
-### Looking for a JavaScript/FileSystemNode package?
-
-Check out the NPM alternative 📦 Repomix: <https://github.com/yamadashy/repomix>
-
-## 🚀 Project Growth
-
-[![Star History Chart](https://api.star-history.com/svg?repos=cyclotruc/gitingest&type=Date)](https://star-history.com/#cyclotruc/gitingest&Date)
+- [Poetry](https://python-poetry.org/) - Dependency management
+- [Pytest](https://docs.pytest.org/en/stable/) - Testing framework
+- [pytest-cov](https://pytest-cov.readthedocs.io/en/latest/) - Coverage reporting
