@@ -181,7 +181,8 @@ def test_get_preferred_encodings_linux(mock_system, mock_encoding):
     encodings = get_preferred_encodings()
     assert encodings[0] == 'utf-8'
     assert 'utf-16' in encodings
-    assert 'latin' in encodings
+    # Correct the assertion to expect 'latin-1'
+    assert 'latin-1' in encodings
     assert 'cp1252' not in encodings # Windows-specific encoding
 
 
@@ -194,4 +195,3 @@ def test_get_preferred_encodings_windows(mock_system, mock_encoding):
     assert 'utf-8' in encodings
     assert 'cp1252' in encodings # Windows-specific encoding
     assert 'iso-8859-1' in encodings # Another Windows-specific encoding
-
