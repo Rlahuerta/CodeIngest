@@ -2,14 +2,15 @@
 
 import os
 import warnings
-from typing import Iterator, List, Optional, Tuple # Added List
+from typing import Iterator, List, Optional, Tuple
 
 import tiktoken
 
 from CodeIngest.query_parsing import IngestionQuery
 from CodeIngest.schemas import FileSystemNode, FileSystemNodeType
 from CodeIngest.schemas.filesystem_schema import SEPARATOR
-from server.server_config import MAX_DISPLAY_SIZE
+
+MAX_DISPLAY_SIZE: int = 300_000
 
 
 def format_node(node: FileSystemNode, query: IngestionQuery) -> Tuple[str, str, str]:
@@ -19,97 +20,98 @@ def format_node(node: FileSystemNode, query: IngestionQuery) -> Tuple[str, str, 
     Parameters
     ----------
     node : FileSystemNode
-        The file system node to be summarized.
+        The file system node to be summarized (can be the root of a directory or a single file).
     query : IngestionQuery
-        The parsed query object containing information about the repository and query parameters.
+        The parsed query object containing information about the source and parameters.
 
     Returns
     -------
     Tuple[str, str, str]
         A tuple containing the summary, directory structure, and file contents.
-    """
-    is_single_file = node.type == FileSystemNodeType.FILE
-    summary = _create_summary_prefix(query, single_file=is_single_file)
+"""
+    # Determine if the *initial* input source represented a single file
+    is_single_file_input = (query.local_path == node.path and node.type == FileSystemNodeType.FILE)
 
-    tree = "Directory structure:\n" + _create_tree_structure(query, node)
+    summary = _create_summary_prefix(query, single_file=is_single_file_input)
+
+    # --- Tree Structure ---
+    if is_single_file_input:
+        tree = f"File: {node.name}\n"
+    else:
+        tree = "Directory structure:\n" + _create_tree_structure(query, node)
 
     # --- Assemble Formatted Content ---
     content_parts = []
     total_content_size = 0
     cropped = False
-    total_files_processed = 0 # For directory summary
+    total_files_processed = 0
+    line_count = 0
 
-    # Use a queue for breadth-first or depth-first traversal to gather file nodes
-    nodes_to_process = [node]
-    all_file_chunks = {} # Store chunks to avoid reading twice
+    nodes_to_process: List[FileSystemNode] = [node]
+    all_file_chunks: dict[str, List[str]] = {}
+    processed_paths: set[Path] = set() # Use Path object for tracking
 
     while nodes_to_process:
-        current_node = nodes_to_process.pop(0) # Use pop(0) for BFS-like order
+        current_node = nodes_to_process.pop(0)
 
         if current_node.type == FileSystemNodeType.FILE:
-            # --- Read chunks ONCE ---
+            if current_node.path in processed_paths: continue
+            processed_paths.add(current_node.path)
+
             try:
-                # Store chunks associated with the node's path_str
-                all_file_chunks[current_node.path_str] = list(current_node.read_chunks())
-                total_files_processed += 1 # Count files successfully read (even if error message)
+                file_content_list = list(current_node.read_chunks())
+                all_file_chunks[current_node.path_str] = file_content_list
+
+                first_chunk = file_content_list[0] if file_content_list else ""
+                if not first_chunk.startswith("Error:") and first_chunk != "[Non-text file]":
+                    file_content_str_for_lines = "".join(file_content_list)
+                    current_file_lines = file_content_str_for_lines.count('\n')
+                    if file_content_str_for_lines and not file_content_str_for_lines.endswith('\n'):
+                        current_file_lines += 1
+                    # Add to total line count only if it's the single file input
+                    if is_single_file_input and current_node.path == query.local_path:
+                        line_count = current_file_lines
+                total_files_processed += 1
             except Exception as e:
                 warnings.warn(f"Error reading chunks for {current_node.path_str}: {e}")
                 all_file_chunks[current_node.path_str] = [f"Error reading file content: {e}"]
-                total_files_processed += 1 # Count files attempted
+                total_files_processed += 1
 
         elif current_node.type == FileSystemNodeType.DIRECTORY:
-            # Add children to the queue (ensure sorted for consistent processing order)
             current_node.sort_children()
-            # Prepend children to maintain processing order (like DFS) or append for BFS
-            nodes_to_process = current_node.children + nodes_to_process # DFS-like order
+            nodes_to_process = current_node.children + nodes_to_process # DFS
 
-    # --- Now build the content string and calculate lines ---
-    line_count = 0
-    for path_str, chunks in all_file_chunks.items():
+    # --- Build the final content string ---
+    sorted_file_paths = sorted(all_file_chunks.keys())
+
+    for path_str in sorted_file_paths:
+        chunks = all_file_chunks[path_str]
         header = f"{SEPARATOR}\nFILE: {path_str}\n{SEPARATOR}\n"
         content_parts.append(header)
         total_content_size += len(header)
-        if total_content_size > MAX_DISPLAY_SIZE:
-            cropped = True
-            break
+        if total_content_size > MAX_DISPLAY_SIZE: cropped = True; break
 
-        # Join the stored chunks
         file_content_str = "".join(chunks)
         content_parts.append(file_content_str)
         total_content_size += len(file_content_str)
 
-        # --- Calculate lines for this file from stored content ---
-        if not file_content_str.startswith("Error:") and file_content_str != "[Non-text file]":
-            current_file_lines = file_content_str.count('\n')
-            if file_content_str and not file_content_str.endswith('\n'):
-                current_file_lines += 1
-            # Only add to total line count if it's the single file being processed
-            if is_single_file:
-                line_count = current_file_lines
-
-        # Add trailing newlines
         content_parts.append("\n\n")
         total_content_size += 2
 
-        if total_content_size > MAX_DISPLAY_SIZE:
-            cropped = True
-            break
+        if total_content_size > MAX_DISPLAY_SIZE: cropped = True; break
 
     # --- Finalize Summary ---
-    if node.type == FileSystemNodeType.DIRECTORY:
-        # Use the count of files whose chunks were successfully gathered
+    if is_single_file_input:
+        summary += f"Lines: {line_count:,}\n" if line_count > 0 else "Lines: N/A\n"
+    else: # Directory or Zip input
         summary += f"Files analyzed: {total_files_processed}\n"
-    elif node.type == FileSystemNodeType.FILE:
-        summary += f"File: {node.path_str}\n"
-        summary += f"Lines: {line_count:,}\n" if line_count > 0 else "Lines: N/A\n" # Add calculated lines
 
     content = "".join(content_parts)
 
-    # Add cropping message and truncate if needed
     if cropped:
-        item_type = "File" if is_single_file else "Files"
+        item_type = "File" if is_single_file_input else "Files"
         crop_message = (
-            f"({item_type} content cropped to {int(MAX_DISPLAY_SIZE / 1000)}k characters. "
+            f"\n({item_type} content cropped to {int(MAX_DISPLAY_SIZE / 1000)}k characters. "
             f"Download full ingest to see more)\n"
         )
         content = crop_message + content[:MAX_DISPLAY_SIZE - len(crop_message)]
@@ -121,78 +123,67 @@ def format_node(node: FileSystemNode, query: IngestionQuery) -> Tuple[str, str, 
     return summary, tree, content
 
 
-# _create_summary_prefix, _gather_file_info (now integrated), _create_tree_structure, _format_token_count remain the same
 def _create_summary_prefix(query: IngestionQuery, single_file: bool = False) -> str:
-    """Create summary prefix with repo/dir, branch/commit, subpath info."""
+    """Create summary prefix with repo/dir/zip, branch/commit, subpath info."""
     parts = []
-    if query.user_name and query.repo_name:
+    if query.url:
+        # Remote repository
         parts.append(f"Repository: {query.user_name}/{query.repo_name}")
+        if query.commit: parts.append(f"Commit: {query.commit}")
+        elif query.branch and query.branch.lower() not in ("main", "master"):
+            parts.append(f"Branch: {query.branch}")
+    # --- FIX: Logic refined for local sources ---
+    elif single_file:
+         # If the input was determined to be a single file
+         display_path = str(query.local_path.resolve()) # Show the file path
+         parts.append(f"File: {display_path}")
+    elif query.original_zip_path:
+         # If it came from a zip file
+         display_path = str(query.original_zip_path.resolve()) # Show original zip path
+         parts.append(f"Zip File: {display_path}")
     else:
-        # Use resolved absolute path for local directories for clarity
-        local_display_path = str(query.local_path.resolve())
-        parts.append(f"Directory: {local_display_path}")
+         # Otherwise, it's a directory input
+         display_path = str(query.local_path.resolve()) # Show the directory path
+         parts.append(f"Directory: {display_path}")
+    # --- End FIX ---
 
-
-    if query.commit:
-        parts.append(f"Commit: {query.commit}")
-    elif query.branch and query.branch.lower() not in ("main", "master"):
-        parts.append(f"Branch: {query.branch}")
-
-    # Only show subpath if it's not the root and not a single file scenario
+    # Subpath only relevant for non-single-file directory/repo/zip sources
     if query.subpath and query.subpath != "/" and not single_file:
-         # Strip leading/trailing slashes for display
         display_subpath = query.subpath.strip('/')
-        if display_subpath: # Only add if subpath is not just '/' after stripping
-             parts.append(f"Subpath: {display_subpath}")
-
+        if display_subpath: parts.append(f"Subpath: {display_subpath}")
 
     return "\n".join(parts) + "\n"
 
+
+# _create_tree_structure and _format_token_count remain the same
 def _create_tree_structure(query: IngestionQuery, node: FileSystemNode, prefix: str = "", is_last: bool = True) -> str:
     """Generate a tree-like string representation of the file structure."""
-    # Use node's path_str for top-level if name is missing (shouldn't happen often)
-    node_name = node.name if node.name else node.path_str
+    node_name = node.name if node.path_str != "." else node.name
 
     tree_str = ""
-    # Determine connector based on whether it's the last item in its parent's list
-    # This requires the parent to have sorted children *before* calling this function
     current_prefix = "└── " if is_last else "├── "
 
     display_name = node_name
-    if node.type == FileSystemNodeType.DIRECTORY:
-        display_name += "/"
+    if node.type == FileSystemNodeType.DIRECTORY and node.path_str != ".": display_name += "/"
     elif node.type == FileSystemNodeType.SYMLINK:
         try:
-            target_path = node.path.readlink() # Read the target path
-             # Try to make target relative to the base path's parent for better context
+            target_path = node.path.readlink()
             try:
-                # Calculate base relative to the *parent* of the original query local path
-                # This provides a more stable base, especially when query.local_path is deep
-                base_for_rel_link = query.local_path.parent if query.local_path.is_file() else query.local_path
-                # Resolve both paths fully before calculating relative path
+                base_for_rel_link = query.local_path.parent
                 rel_target = target_path.resolve().relative_to(base_for_rel_link.resolve())
                 display_name += f" -> {str(rel_target)}"
-            except ValueError:
-                 # If not relative, show absolute path but resolve symlinks in it too
-                 display_name += f" -> {str(target_path.resolve())}"
-            except OSError: # Handle cases where target might not exist during resolve()
-                 display_name += f" -> {str(target_path)} [Target Error]"
+            except (ValueError, OSError): display_name += f" -> {str(target_path)}"
+        except OSError: display_name += " -> [Broken Symlink]"
+        except Exception as e: warnings.warn(f"Error reading link target for {node.path}: {e}"); display_name += " -> [Error reading link]"
 
-        except OSError:
-            display_name += " -> [Broken Symlink]"
-        except Exception as e:
-             warnings.warn(f"Error reading link target for {node.path}: {e}")
-             display_name += " -> [Error reading link]"
-
-
-    tree_str += f"{prefix}{current_prefix}{display_name}\n"
+    line_prefix = prefix if node.path_str != "." else ""
+    tree_str += f"{line_prefix}{current_prefix}{display_name}\n"
 
     if node.type == FileSystemNodeType.DIRECTORY and node.children:
-        # Ensure children are sorted before iterating for consistent output
-        # Sorting should happen in _process_node, but ensure it here too just in case
-        # node.sort_children() # sorting is done in _process_node now
         new_prefix = prefix + ("    " if is_last else "│   ")
-        processable_children = node.children # Already filtered during _process_node
+        if node.path_str == ".": new_prefix = ""
+
+        processable_children = node.children
         for i, child in enumerate(processable_children):
             tree_str += _create_tree_structure(query, node=child, prefix=new_prefix, is_last=i == len(processable_children) - 1)
     return tree_str
@@ -201,16 +192,12 @@ def _create_tree_structure(query: IngestionQuery, node: FileSystemNode, prefix: 
 def _format_token_count(text: str) -> Optional[str]:
     """Estimate token count and format it."""
     try:
-        # Use a common encoding, adjust if needed for specific models
         encoding = tiktoken.get_encoding("cl100k_base")
         tokens = encoding.encode(text, disallowed_special=())
         total_tokens = len(tokens)
-    except Exception as e:
-        warnings.warn(f"Could not estimate token count: {e}", UserWarning)
-        return None
+    except Exception as e: warnings.warn(f"Could not estimate token count: {e}", UserWarning); return None
 
-    if total_tokens >= 1_000_000:
-        return f"{total_tokens / 1_000_000:.1f}M"
-    if total_tokens >= 1_000:
-        return f"{total_tokens / 1_000:.1f}k"
+    if total_tokens == 0: return "0"
+    if total_tokens >= 1_000_000: return f"{total_tokens / 1_000_000:.1f}M"
+    if total_tokens >= 1_000: return f"{total_tokens / 1_000:.1f}k"
     return str(total_tokens)

@@ -2,7 +2,11 @@
 
 import re
 import uuid
+import shutil
 import warnings
+import zipfile # Add zipfile import
+import tempfile # Add tempfile import
+
 from pathlib import Path
 from typing import List, Optional, Set, Union
 from urllib.parse import unquote, urlparse
@@ -31,16 +35,17 @@ async def parse_query(
     ignore_patterns: Optional[Union[str, Set[str]]] = None,
 ) -> IngestionQuery:
     """
-    Parse the input source (URL or path) to extract relevant details for the query.
+    Parse the input source (URL, local path, or local zip file) to extract relevant details for the query.
 
     This function parses the input source to extract details such as the username, repository name,
-    commit hash, branch name, and other relevant information. It also processes the include and ignore
+    commit hash, branch name, and other relevant information. It handles remote Git URLs, local directories,
+    and local .zip files containing repositories. It also processes the include and ignore
     patterns to filter the files and directories to include or exclude from the query.
 
     Parameters
     ----------
     source : str
-        The source URL or file path to parse.
+        The source URL, local directory path, or local .zip file path to parse.
     max_file_size : int
         The maximum file size in bytes to include.
     from_web : bool
@@ -54,19 +59,20 @@ async def parse_query(
     -------
     IngestionQuery
         A dataclass object containing the parsed details of the repository or file path.
-    """
+        If the source was a zip file, `local_path` will point to the temporary extraction directory,
+        and `original_zip_path` and `temp_extract_path` will store the original zip path and temp dir path respectively.
+"""
 
     # Determine the parsing method based on the source type
-    # If the source looks like a URL (starts with http/https, contains known git host) or from_web is true,
-    # treat it as a remote repository.
+    # Treat as remote if it looks like a URL or from_web is true.
+    # Otherwise, check if it ends with .zip or assume it's a local dir/file path.
     is_remote_url = from_web or urlparse(source).scheme in ("https", "http") or any(h in source for h in KNOWN_GIT_HOSTS)
+    is_local_zip = not is_remote_url and source.lower().endswith(".zip")
 
     if is_remote_url:
-        # We either have a full URL or a domain-less slug like 'user/repo'
         query = await _parse_remote_repo(source)
-    else:
-        # Otherwise, treat the source as a local directory path.
-        query = _parse_local_dir_path(source) # Removed await as it's not async
+    else: # Local path (directory, zip file, or single file)
+        query = _parse_local_dir_path(source) # This now handles zip files
 
     # Combine default ignore patterns + custom patterns
     ignore_patterns_set = DEFAULT_IGNORE_PATTERNS.copy()
@@ -76,27 +82,16 @@ async def parse_query(
     # Process include patterns and override ignore patterns accordingly
     if include_patterns:
         parsed_include = _parse_patterns(include_patterns)
-        # Override ignore patterns with include patterns
         ignore_patterns_set = set(ignore_patterns_set) - set(parsed_include)
     else:
         parsed_include = None
 
-    # Ensure all necessary fields are populated, setting defaults if needed
-    return IngestionQuery(
-        user_name=query.user_name,
-        repo_name=query.repo_name,
-        url=query.url,
-        subpath=query.subpath if hasattr(query, 'subpath') else "/", # Ensure subpath exists
-        local_path=query.local_path,
-        slug=query.slug,
-        id=query.id,
-        type=query.type if hasattr(query, 'type') else None, # Ensure type exists
-        branch=query.branch if hasattr(query, 'branch') else None, # Ensure branch exists
-        commit=query.commit if hasattr(query, 'commit') else None, # Ensure commit exists
-        max_file_size=max_file_size,
-        ignore_patterns=ignore_patterns_set,
-        include_patterns=parsed_include,
-    )
+    # Update the query object with processed patterns and max size
+    query.max_file_size = max_file_size
+    query.ignore_patterns = ignore_patterns_set
+    query.include_patterns = parsed_include
+
+    return query
 
 
 async def _parse_remote_repo(source: str) -> IngestionQuery:
@@ -306,12 +301,12 @@ def _parse_patterns(pattern: Union[str, Set[str]]) -> Set[str]:
 
 def _parse_local_dir_path(path_str: str) -> IngestionQuery:
     """
-    Parse the given local file path into a structured query dictionary.
+    Parse the given local file path (directory or zip file) into a structured query dictionary.
 
     Parameters
     ----------
     path_str : str
-        The file path to parse.
+        The file path to parse. Can be a directory or a .zip file.
 
     Returns
     -------
@@ -321,48 +316,83 @@ def _parse_local_dir_path(path_str: str) -> IngestionQuery:
     Raises
     ------
     ValueError
-        If the provided path is empty, does not exist, or is not a directory/file.
-    """
-    # --- Added Check: Handle empty path string explicitly ---
+        If the provided path is empty, does not exist, or is not a directory/zip file.
+"""
     if not path_str:
         raise ValueError("Local path cannot be empty.")
-    # --- End Added Check ---
+
+    is_zip = path_str.lower().endswith(".zip")
+    temp_extract_path: Optional[Path] = None # To store path if extracted from zip
 
     try:
         # Resolve the path to an absolute path and check existence
         path_obj = Path(path_str).resolve(strict=True)
+
+        # --- Added: Handle zip file extraction ---
+        if is_zip:
+            if not path_obj.is_file():
+                 raise ValueError(f"Specified zip path is not a file: {path_str}")
+            if not zipfile.is_zipfile(path_obj):
+                raise ValueError(f"Specified path is not a valid zip file: {path_str}")
+
+            # Create a unique temporary directory for extraction
+            _id = str(uuid.uuid4()) # Generate unique ID for temp dir
+            temp_extract_path = TMP_BASE_PATH / _id / path_obj.stem # Use zip filename stem
+            temp_extract_path.mkdir(parents=True, exist_ok=True)
+
+            print(f"Extracting zip file {path_obj} to {temp_extract_path}...") # Optional: Add logging/print
+            with zipfile.ZipFile(path_obj, 'r') as zip_ref:
+                zip_ref.extractall(temp_extract_path)
+            print("Extraction complete.") # Optional: Add logging/print
+
+            # Use the *extracted* path for further processing
+            ingestion_path = temp_extract_path
+            slug = path_obj.stem # Use zip file name (without ext) as slug
+        elif path_obj.is_dir():
+            # Original logic for directories
+            ingestion_path = path_obj
+            if path_str == ".":
+                slug = path_obj.name
+            else:
+                slug = path_str.rstrip("/\\")
+                if not Path(slug).name and path_obj.name:
+                    slug = path_obj.name
+        elif path_obj.is_file():
+             # It's a single file, not a directory or zip
+             ingestion_path = path_obj
+             slug = path_obj.stem # Use file name stem as slug
+        else:
+             raise ValueError(f"Local path is not a directory, zip file, or regular file: {path_str}")
+
+
     except FileNotFoundError as e:
         raise ValueError(f"Local path not found: {path_str}") from e
-    except Exception as e: # Catch other potential resolution errors
-        raise ValueError(f"Error resolving local path '{path_str}': {e}") from e
-
-
-    # Determine slug based on whether the input was "." or a specific path
-    if path_str == ".":
-        slug = path_obj.name # Use the directory name if "." was given
-    else:
-        # Use the provided path string, stripped of trailing slashes
-        slug = path_str.rstrip("/\\")
-        # Handle cases like "../something" where the slug might just be ".."
-        if not Path(slug).name and path_obj.name:
-             slug = path_obj.name
+    except zipfile.BadZipFile as e:
+        raise ValueError(f"Error opening zip file '{path_str}': {e}") from e
+    except Exception as e:
+        # Clean up temp dir if extraction failed mid-way
+        if temp_extract_path and temp_extract_path.exists():
+             shutil.rmtree(temp_extract_path.parent, ignore_errors=True) # Remove parent ID folder
+        raise ValueError(f"Error resolving or processing local path '{path_str}': {e}") from e
 
 
     # Create IngestionQuery for local path
     return IngestionQuery(
-        user_name=None, # Not applicable for local paths
-        repo_name=None, # Not applicable for local paths
-        url=None,       # No URL for local paths
-        local_path=path_obj,
-        slug=slug,      # Use the derived slug
-        id=str(uuid.uuid4()), # Generate a unique ID
-         # Initialize optional fields for consistency
+        user_name=None,
+        repo_name=None,
+        url=None,
+        local_path=ingestion_path, # Use the potentially extracted path
+        slug=slug,
+        id=str(uuid.uuid4()), # Generate a unique ID (distinct from temp dir ID if zip)
+        # --- Added: Store original zip path if applicable ---
+        original_zip_path=path_obj if is_zip else None,
+        temp_extract_path=temp_extract_path if is_zip else None, # Store temp path if extracted
+        # --- End Added ---
         subpath="/",
         type=None,
         branch=None,
         commit=None,
     )
-
 
 async def try_domains_for_user_and_repo(user_name: str, repo_name: str) -> str:
     """

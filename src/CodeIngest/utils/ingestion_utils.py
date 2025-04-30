@@ -1,19 +1,19 @@
+# src/CodeIngest/utils/ingestion_utils.py
 """Utility functions for the ingestion process."""
 
 from fnmatch import fnmatch
 from pathlib import Path
 from typing import Set
 import sys # Import sys for stderr
-
-# Flag to print header only once
-_exclude_debug_header_printed = False
-_include_debug_header_printed = False # Add header for include debug
+import os # Import os for scandir
 
 def _should_include(path: Path, base_path: Path, include_patterns: Set[str]) -> bool:
     """
     Determine if the given file or directory path matches any of the include patterns.
 
     Checks if the pattern matches either the full relative path or just the filename.
+    If the `include_patterns` set is empty, it returns False (as the intention
+    is typically that *only* matching items are included when patterns are provided).
 
     Parameters
     ----------
@@ -22,43 +22,65 @@ def _should_include(path: Path, base_path: Path, include_patterns: Set[str]) -> 
     base_path : Path
         The base directory from which the relative path is calculated.
     include_patterns : Set[str]
-        A set of patterns to check against the relative path and filename.
+        A set of patterns to check against the relative path and filename. If empty,
+        no path will match.
 
     Returns
     -------
     bool
         `True` if the path or filename matches any include patterns, `False` otherwise.
-    """
-    global _include_debug_header_printed
-    if not _include_debug_header_printed:
-        print("\n--- [DEBUG INCLUDE START] ---", file=sys.stderr)
-        _include_debug_header_printed = True
+"""
+    # --- FIX: Return False if include_patterns is specifically an empty set ---
+    # This means the user provided include patterns, but none matched this item.
+    # Note: The calling function (_process_node) should handle the case where
+    # query.include_patterns is None (meaning include everything not ignored).
+    if not include_patterns: # Handles None and empty set cases implicitly if called directly
+         # However, the test specifically passes an empty set, expecting False.
+         # If the intent is "if include patterns are specified, only matching items pass",
+         # then an empty set means nothing matches.
+         return False
+    # --- End FIX ---
 
     try:
-        rel_path = path.relative_to(base_path)
+        # Ensure paths are resolved for accurate comparison
+        rel_path = path.resolve().relative_to(base_path.resolve())
     except ValueError:
-        # If path is not under base_path at all
-        print(f"[DEBUG INCLUDE] Path '{path}' not relative to base '{base_path}'. Assuming not included.", file=sys.stderr)
+        # Path not relative to base. Check filename only.
+        filename = path.name
+        for pattern in include_patterns:
+            if fnmatch(filename, pattern):
+                 return True
         return False
+
 
     rel_str = str(rel_path)
     filename = path.name # Get just the filename
-
-    print(f"[DEBUG INCLUDE] Checking: Path='{rel_str}', Filename='{filename}' against patterns: {include_patterns}", file=sys.stderr)
 
     # Check if the pattern matches the full relative path OR just the filename
     for pattern in include_patterns:
         if not pattern: # Skip empty patterns
             continue
 
+        # Normalize pattern: remove trailing slash for directory matching if present
+        normalized_pattern = pattern.rstrip('/')
+
+        # Check 1: Exact match on relative path string
         match_rel = fnmatch(rel_str, pattern)
+
+        # Check 2: Match on filename only
         match_file = fnmatch(filename, pattern)
 
-        if match_rel or match_file:
-            print(f"[DEBUG INCLUDE] Match Found! Pattern='{pattern}' matched Path='{rel_str}' ({match_rel}) or Filename='{filename}' ({match_file}). Including.", file=sys.stderr)
+        # Check 3: Directory match - does pattern match the directory name itself?
+        is_dir = getattr(path, '_is_dir', None)
+        if is_dir is None: is_dir = path.is_dir()
+        match_dir_name = is_dir and fnmatch(filename, normalized_pattern)
+
+        # Check 4: Directory content match - pattern like "dir/*" and path is "dir"
+        match_dir_contents = is_dir and pattern.endswith('/*') and fnmatch(rel_str, pattern[:-2])
+
+        if match_rel or match_file or match_dir_name or match_dir_contents:
             return True # Match found
 
-    print(f"[DEBUG INCLUDE] No Match: Path='{rel_str}', Filename='{filename}' did not match any include patterns. Excluding.", file=sys.stderr)
     return False # No include pattern matched
 
 
@@ -67,7 +89,6 @@ def _should_exclude(path: Path, base_path: Path, ignore_patterns: Set[str]) -> b
     Determine if the given file or directory path matches any of the ignore patterns.
 
     Checks if the pattern matches either the full relative path or just the filename.
-    Includes debugging print statements.
 
     Parameters
     ----------
@@ -82,25 +103,23 @@ def _should_exclude(path: Path, base_path: Path, ignore_patterns: Set[str]) -> b
     -------
     bool
         `True` if the path or filename matches any ignore patterns, `False` otherwise.
-    """
-    global _exclude_debug_header_printed
-    if not _exclude_debug_header_printed:
-        print("\n--- [DEBUG EXCLUDE START] ---", file=sys.stderr)
-        _exclude_debug_header_printed = True
+"""
+    if not ignore_patterns:
+        return False
 
     try:
-        rel_path = path.relative_to(base_path)
+        # Ensure paths are resolved for accurate comparison
+        rel_path = path.resolve().relative_to(base_path.resolve())
     except ValueError:
-        print(f"[DEBUG EXCLUDE] Path '{path}' not relative to base '{base_path}'. Assuming not excluded.", file=sys.stderr)
-        return False # Path outside base shouldn't be implicitly excluded here.
+        # Path not relative to base. Check filename only.
+        filename = path.name
+        for pattern in ignore_patterns:
+            if fnmatch(filename, pattern):
+                return True
+        return False # Path outside base and filename doesn't match exclude patterns.
 
     rel_str = str(rel_path)
     filename = path.name # Get just the filename
-
-    # --- Debug Print ---
-    # Print check for every item
-    print(f"[DEBUG EXCLUDE] Checking: Path='{rel_str}', Filename='{filename}' against patterns: {ignore_patterns}", file=sys.stderr)
-    # --- End Debug Print ---
 
     # Check if the pattern matches the full relative path OR just the filename
     for pattern in ignore_patterns:
@@ -108,18 +127,21 @@ def _should_exclude(path: Path, base_path: Path, ignore_patterns: Set[str]) -> b
         if not pattern:
             continue
 
+        # Normalize pattern: remove trailing slash if present for directory matching
+        normalized_pattern = pattern.rstrip('/')
+
+        # Check 1: Match relative path string (e.g., "src/utils.py" matches "src/utils.py")
         match_rel = fnmatch(rel_str, pattern)
+
+        # Check 2: Match filename only (e.g., "utils.py" matches "*.py")
         match_file = fnmatch(filename, pattern)
 
-        if match_rel or match_file:
-            # --- Debug Print ---
-            print(f"[DEBUG EXCLUDE] Match Found! Pattern='{pattern}' matched Path='{rel_str}' ({match_rel}) or Filename='{filename}' ({match_file}). Excluding.", file=sys.stderr)
-            # --- End Debug Print ---
-            return True # Match found
+        # Check 3: Directory match - pattern matches directory name itself (e.g., "src" matches "src")
+        is_dir = getattr(path, '_is_dir', None)
+        if is_dir is None: is_dir = path.is_dir()
+        match_dir_name = is_dir and fnmatch(filename, normalized_pattern)
 
-    # --- Debug Print ---
-    # If no pattern matched, print for the interesting paths
-    print(f"[DEBUG EXCLUDE] No Match: Path='{rel_str}', Filename='{filename}'. Including.", file=sys.stderr)
-    # --- End Debug Print ---
+        if match_rel or match_file or match_dir_name:
+            return True # Match found
 
     return False # No ignore pattern matched
