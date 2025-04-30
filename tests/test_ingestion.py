@@ -43,7 +43,7 @@ from CodeIngest.utils.ingestion_utils import _should_exclude, _should_include
 # Fixture to create a temporary directory structure
 @pytest.fixture
 def temp_directory(tmp_path: Path) -> Path:
-    test_dir = tmp_path / "test_repo"
+    test_dir = tmp_path / "test_repo_source"
     test_dir.mkdir()
     (test_dir / "file1.txt").write_text("Hello World")
     (test_dir / "file2.py").write_text("print('Hello')")
@@ -227,13 +227,13 @@ def test_apply_gitingest_file_ignore_patterns_with_non_strings(temp_directory: P
     assert sample_query.ignore_patterns == {"*.bak", "*.log", "temp/"}
 
 
+@pytest.mark.filterwarnings("ignore:coroutine 'AsyncMockMixin._execute_mock_call' was never awaited")
 def test_process_node_oserror_iterdir(temp_directory: Path, sample_query: IngestionQuery) -> None:
     root_node = FileSystemNode(name="test_repo", type=FileSystemNodeType.DIRECTORY, path_str=".", path=temp_directory)
     stats = FileSystemStats()
-    # --- FIX: Patch Path.iterdir instead of os.scandir ---
     with patch.object(Path, "iterdir", side_effect=OSError("Permission denied")):
-        # Match the actual warning message
-        with pytest.warns(UserWarning, match=r"Cannot access directory contents .*test_repo: Permission denied"):
+        # Check that the correct UserWarning is still emitted
+        with pytest.warns(UserWarning, match=r"Cannot access directory contents .*test_repo_source: Permission denied"):
              _process_node(root_node, sample_query, stats, temp_directory)
     assert len(root_node.children) == 0
 
