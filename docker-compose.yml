@@ -2,5 +2,7 @@ services:
   codeingest:
       build:
         context: .
-        no_cache: true
+#        no_cache: true
       image: codeingest:latest
+      ports:
+        - "9000:9000" # Expose port 9000 from the container to the host
