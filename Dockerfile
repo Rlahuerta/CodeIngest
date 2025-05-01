@@ -64,8 +64,7 @@ RUN chown -R appuser:appuser $PYSETUP_PATH
 
 # Switch to non-root user
 USER appuser
-EXPOSE 8800
+EXPOSE 8800/tcp
 
-#SHELL ["/bin/bash", "-c"]
-#CMD ["python", "-m", "uvicorn", "server.main:app", "--host", "0.0.0.0", "--port", "9000"]
+#CMD ["poetry", "run", "uvicorn", "src.server.main:app", "--host", "127.0.0.1", "--port", "8800"]
 CMD ["poetry", "run", "uvicorn", "src.server.main:app", "--host", "0.0.0.0", "--port", "8800"]
