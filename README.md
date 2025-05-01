@@ -156,7 +156,7 @@ You can run the included FastAPI web interface locally using Docker.
 2. Run the container:
 
    ``` bash
-   docker run -d --name codeingest -p 9000:9000 codeingest:latest
+   docker run -d --name codeingest -p 8800:8800 codeingest:latest
    ```
 
 The application will be available at `http://localhost:9000`.

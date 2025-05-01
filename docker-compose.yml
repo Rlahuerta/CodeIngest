@@ -1,3 +1,4 @@
+version: '3.8' # Or newer, Portainer typically supports recent versions
 services:
   codeingest:
       build:
@@ -5,4 +6,4 @@ services:
 #        no_cache: true
       image: codeingest:latest
       ports:
-        - "9000:9000" # Expose port 9000 from the container to the host
+        - "8800:8800" # Expose port 9000 from the container to the host
