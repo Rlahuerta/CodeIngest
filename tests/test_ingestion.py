@@ -33,9 +33,8 @@ from CodeIngest.schemas import (
     FileSystemNodeType,
     FileSystemStats,
 )
-# --- FIX: Import filesystem_schema explicitly for patching Path.open ---
+
 from CodeIngest.schemas import filesystem_schema
-# --- End FIX ---
 from CodeIngest.schemas.filesystem_schema import SEPARATOR
 from CodeIngest.utils.ignore_patterns import DEFAULT_IGNORE_PATTERNS
 from CodeIngest.utils.ingestion_utils import _should_exclude, _should_include

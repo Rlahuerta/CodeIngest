@@ -29,16 +29,21 @@ priority = "primary"
 [tool.poetry.dependencies]
 python = ">=3.10,<4"
 click = ">=8.0.0"
-fastapi = { version = ">=0.109.1", extras = ["standard"] }
+fastapi = "^0.109.1"
+#fastapi = { version = "^0.109.1", extras = ["standard"] }
 pydantic = "*"
 slowapi = "*"
 tiktoken = "*"
-uvicorn = "^0.34.2"
+uvicorn = {version = "^0.34.2", extras = ["standard"]}
 tomli = { version = "*", python = "<3.11" } # Required for Python < 3.11 to parse TOML
 poetry-dynamic-versioning = "^1.7.1"
 typing-extensions = "^4.13.2"
 httpcore = ">=1.0.0,<2.0.0"
 chardet = "^5.2.0"
+# --- Added httpx pinning ---
+httpx = "<0.27"
+# --- Add python-multipart for FastAPI file uploads ---
+python-multipart = "*"
 
 [tool.poetry.group.dev.dependencies]
 black = "*"
