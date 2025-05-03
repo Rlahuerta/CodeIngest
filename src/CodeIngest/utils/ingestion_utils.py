@@ -1,35 +1,28 @@
 # src/CodeIngest/utils/ingestion_utils.py
 """Utility functions for the ingestion process."""
 
-# --- Import pathspec ---
 import pathspec
+# --- Import the correct pattern class ---
+from pathspec.patterns import GitWildMatchPattern
 # --- End import ---
 
 from pathlib import Path
-from typing import Set, Optional # Import Optional
-import sys # Import sys for stderr
-import os # Import os for scandir
-import warnings # Import warnings
+from typing import Set, Optional
+import sys
+import os
+import warnings
 
 
 def _get_relative_path_string(path: Path, base_path: Path) -> Optional[str]:
     """Safely get the relative path string."""
     try:
-        # Ensure paths are resolved for accurate comparison
         resolved_path = path.resolve()
         resolved_base = base_path.resolve()
-        # Check if the path is actually within the base path
-        # Allow path == base_path for the root directory itself
         if resolved_path != resolved_base and resolved_base not in resolved_path.parents :
-             # If path is not within base_path (e.g., symlink pointing outside),
-             # we cannot get a meaningful relative path for gitignore-style matching.
-             # Return None to indicate this.
              return None
         rel_path = resolved_path.relative_to(resolved_base)
-        # Use forward slashes for consistency, as pathspec expects Unix-style paths
         return rel_path.as_posix()
     except ValueError:
-        # This might happen if paths are on different drives (Windows) or other issues
         warnings.warn(f"Could not determine relative path for {path} against base {base_path}", UserWarning)
         return None
     except OSError as e:
@@ -59,32 +52,22 @@ def _should_include(path: Path, base_path: Path, include_patterns: Optional[Set[
         `True` if the path matches any include patterns (or if patterns are None),
         `False` otherwise (including if patterns is an empty set {}).
     """
-    # --- Updated Logic ---
     if include_patterns is None:
-        # If None, default is to include everything (exclusion logic will handle ignores)
         return True
     if not include_patterns: # Checks for empty set {}
-        # If an empty set is explicitly passed, nothing should be included
         return False
-    # --- End Updated Logic ---
 
     rel_path_str = _get_relative_path_string(path, base_path)
 
-    # If we couldn't get a relative path (e.g., outside base), it cannot match patterns anchored to base
+    # --- Use Correct Class Name ---
+    spec = pathspec.PathSpec.from_lines(GitWildMatchPattern, list(include_patterns))
+    # --- End Use ---
+
     if rel_path_str is None:
-         # Check if any pattern matches the filename directly (non-anchored patterns)
-         # Use GitIgnorePattern for standard .gitignore syntax
-         spec = pathspec.PathSpec.from_lines(pathspec.GitIgnorePattern, list(include_patterns))
-         # pathspec matches against the full path string representation
+         # Match against filename only if relative path couldn't be determined
          return spec.match_file(path.name)
 
-
-    # Create a PathSpec object from the include patterns
-    # Use GitIgnorePattern for standard .gitignore syntax
-    spec = pathspec.PathSpec.from_lines(pathspec.GitIgnorePattern, list(include_patterns))
-
-    # Check if the relative path matches any pattern in the spec
-    # pathspec expects paths relative to the root where the patterns apply (base_path here)
+    # Match against the relative path
     return spec.match_file(rel_path_str)
 
 
@@ -108,23 +91,18 @@ def _should_exclude(path: Path, base_path: Path, ignore_patterns: Optional[Set[s
     bool
         `True` if the path matches any ignore patterns, `False` otherwise.
     """
-    # If no ignore patterns are specified, nothing is excluded
     if not ignore_patterns:
         return False
 
     rel_path_str = _get_relative_path_string(path, base_path)
 
-    # If we couldn't get a relative path (e.g., outside base), check filename only
+    # --- Use Correct Class Name ---
+    spec = pathspec.PathSpec.from_lines(GitWildMatchPattern, list(ignore_patterns))
+    # --- End Use ---
+
     if rel_path_str is None:
-         # Use GitIgnorePattern for standard .gitignore syntax
-         spec = pathspec.PathSpec.from_lines(pathspec.GitIgnorePattern, list(ignore_patterns))
-         # Match against filename for non-anchored patterns
+         # Match against filename only if relative path couldn't be determined
          return spec.match_file(path.name)
 
-
-    # Create a PathSpec object from the ignore patterns
-    # Use GitIgnorePattern for standard .gitignore syntax
-    spec = pathspec.PathSpec.from_lines(pathspec.GitIgnorePattern, list(ignore_patterns))
-
-    # Check if the relative path matches any pattern in the spec
+    # Match against the relative path
     return spec.match_file(rel_path_str)

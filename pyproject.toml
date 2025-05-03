@@ -110,6 +110,11 @@ python_classes = "Test*"
 python_functions = "test_*"
 # addopts = "--cov-report=term-missing --cov-report=xml" # Removed --cov=CodeIngest
 addopts = "--cov=src/CodeIngest --cov-report=term-missing --cov-report=xml"
+filterwarnings = [
+    # Ignore the specific PendingDeprecationWarning from starlette.formparsers about multipart
+    "ignore:Please use `import python_multipart` instead.:PendingDeprecationWarning:starlette.formparsers",
+    # You can add other filters here if needed
+]
 
 # --- ADD Coverage Configuration ---
 [tool.coverage.run]
