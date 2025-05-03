@@ -1,94 +1,46 @@
 # src/CodeIngest/utils/ingestion_utils.py
 """Utility functions for the ingestion process."""
 
-from fnmatch import fnmatch
+# --- Import pathspec ---
+import pathspec
+# --- End import ---
+
 from pathlib import Path
-from typing import Set
+from typing import Set, Optional # Import Optional
 import sys # Import sys for stderr
 import os # Import os for scandir
+import warnings # Import warnings
 
-def _should_include(path: Path, base_path: Path, include_patterns: Set[str]) -> bool:
-    """
-    Determine if the given file or directory path matches any of the include patterns.
 
-    Checks if the pattern matches either the full relative path or just the filename.
-    If the `include_patterns` set is empty, it returns False (as the intention
-    is typically that *only* matching items are included when patterns are provided).
-
-    Parameters
-    ----------
-    path : Path
-        The absolute path of the file or directory to check.
-    base_path : Path
-        The base directory from which the relative path is calculated.
-    include_patterns : Set[str]
-        A set of patterns to check against the relative path and filename. If empty,
-        no path will match.
-
-    Returns
-    -------
-    bool
-        `True` if the path or filename matches any include patterns, `False` otherwise.
-"""
-    # --- FIX: Return False if include_patterns is specifically an empty set ---
-    # This means the user provided include patterns, but none matched this item.
-    # Note: The calling function (_process_node) should handle the case where
-    # query.include_patterns is None (meaning include everything not ignored).
-    if not include_patterns: # Handles None and empty set cases implicitly if called directly
-         # However, the test specifically passes an empty set, expecting False.
-         # If the intent is "if include patterns are specified, only matching items pass",
-         # then an empty set means nothing matches.
-         return False
-    # --- End FIX ---
-
+def _get_relative_path_string(path: Path, base_path: Path) -> Optional[str]:
+    """Safely get the relative path string."""
     try:
         # Ensure paths are resolved for accurate comparison
-        rel_path = path.resolve().relative_to(base_path.resolve())
+        resolved_path = path.resolve()
+        resolved_base = base_path.resolve()
+        # Check if the path is actually within the base path
+        # Allow path == base_path for the root directory itself
+        if resolved_path != resolved_base and resolved_base not in resolved_path.parents :
+             # If path is not within base_path (e.g., symlink pointing outside),
+             # we cannot get a meaningful relative path for gitignore-style matching.
+             # Return None to indicate this.
+             return None
+        rel_path = resolved_path.relative_to(resolved_base)
+        # Use forward slashes for consistency, as pathspec expects Unix-style paths
+        return rel_path.as_posix()
     except ValueError:
-        # Path not relative to base. Check filename only.
-        filename = path.name
-        for pattern in include_patterns:
-            if fnmatch(filename, pattern):
-                 return True
-        return False
+        # This might happen if paths are on different drives (Windows) or other issues
+        warnings.warn(f"Could not determine relative path for {path} against base {base_path}", UserWarning)
+        return None
+    except OSError as e:
+        warnings.warn(f"OS error resolving path {path} or base {base_path}: {e}", UserWarning)
+        return None
 
 
-    rel_str = str(rel_path)
-    filename = path.name # Get just the filename
-
-    # Check if the pattern matches the full relative path OR just the filename
-    for pattern in include_patterns:
-        if not pattern: # Skip empty patterns
-            continue
-
-        # Normalize pattern: remove trailing slash for directory matching if present
-        normalized_pattern = pattern.rstrip('/')
-
-        # Check 1: Exact match on relative path string
-        match_rel = fnmatch(rel_str, pattern)
-
-        # Check 2: Match on filename only
-        match_file = fnmatch(filename, pattern)
-
-        # Check 3: Directory match - does pattern match the directory name itself?
-        is_dir = getattr(path, '_is_dir', None)
-        if is_dir is None: is_dir = path.is_dir()
-        match_dir_name = is_dir and fnmatch(filename, normalized_pattern)
-
-        # Check 4: Directory content match - pattern like "dir/*" and path is "dir"
-        match_dir_contents = is_dir and pattern.endswith('/*') and fnmatch(rel_str, pattern[:-2])
-
-        if match_rel or match_file or match_dir_name or match_dir_contents:
-            return True # Match found
-
-    return False # No include pattern matched
-
-
-def _should_exclude(path: Path, base_path: Path, ignore_patterns: Set[str]) -> bool:
+def _should_include(path: Path, base_path: Path, include_patterns: Optional[Set[str]]) -> bool:
     """
-    Determine if the given file or directory path matches any of the ignore patterns.
-
-    Checks if the pattern matches either the full relative path or just the filename.
+    Determine if the given file or directory path matches any of the include patterns
+    using pathspec for .gitignore style matching.
 
     Parameters
     ----------
@@ -96,52 +48,83 @@ def _should_exclude(path: Path, base_path: Path, ignore_patterns: Set[str]) -> b
         The absolute path of the file or directory to check.
     base_path : Path
         The base directory from which the relative path is calculated.
-    ignore_patterns : Set[str]
-        A set of patterns to check against the relative path and filename.
+    include_patterns : Set[str], optional
+        A set of gitignore-style patterns to check against the relative path.
+        If None, all paths are considered included.
+        If an empty set {}, no paths are considered included.
 
     Returns
     -------
     bool
-        `True` if the path or filename matches any ignore patterns, `False` otherwise.
-"""
+        `True` if the path matches any include patterns (or if patterns are None),
+        `False` otherwise (including if patterns is an empty set {}).
+    """
+    # --- Updated Logic ---
+    if include_patterns is None:
+        # If None, default is to include everything (exclusion logic will handle ignores)
+        return True
+    if not include_patterns: # Checks for empty set {}
+        # If an empty set is explicitly passed, nothing should be included
+        return False
+    # --- End Updated Logic ---
+
+    rel_path_str = _get_relative_path_string(path, base_path)
+
+    # If we couldn't get a relative path (e.g., outside base), it cannot match patterns anchored to base
+    if rel_path_str is None:
+         # Check if any pattern matches the filename directly (non-anchored patterns)
+         # Use GitIgnorePattern for standard .gitignore syntax
+         spec = pathspec.PathSpec.from_lines(pathspec.GitIgnorePattern, list(include_patterns))
+         # pathspec matches against the full path string representation
+         return spec.match_file(path.name)
+
+
+    # Create a PathSpec object from the include patterns
+    # Use GitIgnorePattern for standard .gitignore syntax
+    spec = pathspec.PathSpec.from_lines(pathspec.GitIgnorePattern, list(include_patterns))
+
+    # Check if the relative path matches any pattern in the spec
+    # pathspec expects paths relative to the root where the patterns apply (base_path here)
+    return spec.match_file(rel_path_str)
+
+
+def _should_exclude(path: Path, base_path: Path, ignore_patterns: Optional[Set[str]]) -> bool:
+    """
+    Determine if the given file or directory path matches any of the ignore patterns
+    using pathspec for .gitignore style matching.
+
+    Parameters
+    ----------
+    path : Path
+        The absolute path of the file or directory to check.
+    base_path : Path
+        The base directory from which the relative path is calculated.
+    ignore_patterns : Set[str], optional
+        A set of gitignore-style patterns to check against the relative path.
+        If None or empty, no paths are excluded.
+
+    Returns
+    -------
+    bool
+        `True` if the path matches any ignore patterns, `False` otherwise.
+    """
+    # If no ignore patterns are specified, nothing is excluded
     if not ignore_patterns:
         return False
 
-    try:
-        # Ensure paths are resolved for accurate comparison
-        rel_path = path.resolve().relative_to(base_path.resolve())
-    except ValueError:
-        # Path not relative to base. Check filename only.
-        filename = path.name
-        for pattern in ignore_patterns:
-            if fnmatch(filename, pattern):
-                return True
-        return False # Path outside base and filename doesn't match exclude patterns.
+    rel_path_str = _get_relative_path_string(path, base_path)
 
-    rel_str = str(rel_path)
-    filename = path.name # Get just the filename
+    # If we couldn't get a relative path (e.g., outside base), check filename only
+    if rel_path_str is None:
+         # Use GitIgnorePattern for standard .gitignore syntax
+         spec = pathspec.PathSpec.from_lines(pathspec.GitIgnorePattern, list(ignore_patterns))
+         # Match against filename for non-anchored patterns
+         return spec.match_file(path.name)
 
-    # Check if the pattern matches the full relative path OR just the filename
-    for pattern in ignore_patterns:
-        # Ensure pattern is not empty before matching
-        if not pattern:
-            continue
 
-        # Normalize pattern: remove trailing slash if present for directory matching
-        normalized_pattern = pattern.rstrip('/')
+    # Create a PathSpec object from the ignore patterns
+    # Use GitIgnorePattern for standard .gitignore syntax
+    spec = pathspec.PathSpec.from_lines(pathspec.GitIgnorePattern, list(ignore_patterns))
 
-        # Check 1: Match relative path string (e.g., "src/utils.py" matches "src/utils.py")
-        match_rel = fnmatch(rel_str, pattern)
-
-        # Check 2: Match filename only (e.g., "utils.py" matches "*.py")
-        match_file = fnmatch(filename, pattern)
-
-        # Check 3: Directory match - pattern matches directory name itself (e.g., "src" matches "src")
-        is_dir = getattr(path, '_is_dir', None)
-        if is_dir is None: is_dir = path.is_dir()
-        match_dir_name = is_dir and fnmatch(filename, normalized_pattern)
-
-        if match_rel or match_file or match_dir_name:
-            return True # Match found
-
-    return False # No ignore pattern matched
+    # Check if the relative path matches any pattern in the spec
+    return spec.match_file(rel_path_str)

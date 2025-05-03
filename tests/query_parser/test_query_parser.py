@@ -281,20 +281,20 @@ async def test_parse_query_include_and_ignore_overlap() -> None:
 
 
 @pytest.mark.asyncio
-async def test_parse_query_local_path(tmp_path: Path) -> None: # Added tmp_path fixture
+async def test_parse_query_local_path(tmp_path: Path) -> None:
     """
     Test `parse_query` with a local file path.
     """
-    # Create a dummy directory within the temporary path
     dummy_project_path = tmp_path / "project"
     dummy_project_path.mkdir()
-
-    path_str = str(dummy_project_path) # Use the path of the created directory
+    path_str = str(dummy_project_path)
     query = await parse_query(path_str, max_file_size=100, from_web=False)
 
-    assert query.local_path == dummy_project_path.resolve() # Check resolved path
+    assert query.local_path == dummy_project_path.resolve()
     assert query.id is not None
-    assert query.slug == path_str # Slug should be the input path string
+    # --- FIX: Assert slug is the directory name ---
+    assert query.slug == dummy_project_path.name # Slug should be the directory name
+    # --- End FIX ---
     assert query.url is None
     assert query.user_name is None
     assert query.repo_name is None
@@ -322,22 +322,21 @@ async def test_parse_query_local_path_dot(tmp_path: Path) -> None: # Added tmp_p
 
 
 @pytest.mark.asyncio
-async def test_parse_query_relative_path(tmp_path: Path) -> None: # Added tmp_path fixture
+async def test_parse_query_relative_path(tmp_path: Path) -> None:
     """
     Test `parse_query` with a relative path.
     """
-    # Create a dummy directory relative to tmp_path
-    dummy_subdir = os.path.join(str(tmp_path), "subdir")
-    os.makedirs(dummy_subdir, exist_ok=True)
+    dummy_subdir = tmp_path / "subdir"
+    dummy_subdir.mkdir(exist_ok=True)
+    dummy_project_path = dummy_subdir / "project"
+    dummy_project_path.mkdir(exist_ok=True)
 
-    dummy_project_path = os.path.join(dummy_subdir, "project")
-    os.makedirs(dummy_project_path, exist_ok=True)
+    # Use the absolute path string as input for parse_query
+    path_str = str(dummy_project_path)
+    query = await parse_query(path_str, max_file_size=100, from_web=False)
 
-    # Let's use the absolute path derived from tmp_path for clarity in the test input
-    query = await parse_query(dummy_project_path, max_file_size=100, from_web=False)
-
-    assert str(query.local_path) == dummy_project_path
-    assert query.slug == dummy_project_path # Slug is the input string
+    assert query.local_path == dummy_project_path.resolve() # Compare resolved paths
+    assert query.slug == dummy_project_path.name # Slug is the final directory name
     assert query.url is None
 
 

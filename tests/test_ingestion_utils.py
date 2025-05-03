@@ -83,11 +83,11 @@ def test_include_wildcard_filename(base_path: Path):
     assert _should_include(base_path / "README.md", base_path, patterns) is False
 
 def test_include_directory_pattern(base_path: Path):
-    patterns = {"docs"}
+    """Test _should_include behavior with directory patterns."""
+    patterns = {"docs"} # Pattern matching the directory name
     assert _should_include(base_path / "docs", base_path, patterns) is True
-    assert _should_include(base_path / "docs" / "index.md", base_path, patterns) is False
-    patterns_all_in_docs = {"docs/*"}
-    assert _should_include(base_path / "docs" / "index.md", base_path, patterns_all_in_docs) is True
+    assert _should_include(base_path / "docs" / "index.md", base_path, patterns) is True
+    assert _should_include(base_path / "other" / "file.txt", base_path, patterns) is False
 
 def test_include_path_pattern(base_path: Path):
     patterns = {"src/module.py"}
@@ -102,9 +102,7 @@ def test_include_no_match(base_path: Path):
 def test_include_empty_patterns(base_path: Path):
     """Test that _should_include returns False when the pattern set is empty."""
     patterns = set()
-    # --- FIX: Assertion corrected based on updated logic ---
     assert _should_include(base_path / "README.md", base_path, patterns) is False
-    # --- End FIX ---
 
 # --- Tests for is_text_file ---
 # ... (these tests remain the same) ...

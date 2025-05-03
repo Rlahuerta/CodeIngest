@@ -354,13 +354,13 @@ def test_process_node_with_exclude_pattern(temp_directory: Path, sample_query: I
     assert "file1.txt" in processed_paths
 
 
-def test__should_exclude_directory_pattern(temp_directory: Path) -> None:
+def test_should_exclude_directory_pattern(temp_directory: Path) -> None:
     """Test _should_exclude correctly excludes a directory based on a pattern."""
-    base_path = temp_directory; dir_path = temp_directory / "dir2"
+    base_path = temp_directory
+    dir_path = temp_directory / "dir2"
     assert _should_exclude(dir_path, base_path, {"dir2"}) is True
     file_in_dir = dir_path / "file_dir2.txt"
-    assert _should_exclude(file_in_dir, base_path, {"dir2"}) is False
-    assert _should_exclude(file_in_dir, base_path, {"dir2/*"}) is True
+    assert _should_exclude(file_in_dir, base_path, {"dir2"}) is True
 
 
 def test_ingest_query_single_file_is_directory(temp_directory: Path, sample_query: IngestionQuery) -> None:
