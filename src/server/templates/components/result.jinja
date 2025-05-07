@@ -1,38 +1,98 @@
+{# src/server/templates/components/result.jinja #}
 <script>
-    function getFileName(line) {
-        // Skips "|", "└", "├" found in file tree
-        const index = line.search(/[a-zA-Z0-9]/);
-        // Handle cases where line might not have expected characters
-        return index !== -1 ? line.substring(index).trim() : line.trim();
+    // Function to extract the display name (without prefixes/suffixes) from a tree item
+    function getBaseNameFromTreeItem(element) {
+        // Get the text content of the potentially linked element or the pre element
+        let text = element.querySelector('a')?.textContent || element.textContent;
+        // Remove common tree prefixes and suffixes like /, -> ...
+        text = text.replace(/^[│└├─\s]*/, '').replace(/(\/| -> .*)$/, '').trim();
+        return text;
     }
 
     function toggleFile(element) {
         const patternInput = document.getElementById("pattern");
-        if (!patternInput) return; // Guard against missing element
+        if (!patternInput) return;
 
         const patternFiles = patternInput.value ? patternInput.value.split(",").map(item => item.trim()).filter(Boolean) : [];
 
-        if (element.textContent.includes("Directory structure:")) {
-            return;
-        }
+        // Check if the element itself or its parent is the target pre element
+        const preElement = element.closest('pre[name="tree-line"]');
+        if (!preElement) return; // Should not happen if called correctly
 
-        element.classList.toggle('line-through');
-        element.classList.toggle('text-gray-500');
+        preElement.classList.toggle('line-through');
+        preElement.classList.toggle('text-gray-500');
 
-        const fileName = getFileName(element.textContent);
-        if (!fileName) return; // Don't process empty filenames
+        // Use the helper function to get the base name
+        const baseName = getBaseNameFromTreeItem(preElement);
+        if (!baseName) return; // Don't process empty names
 
-        const fileIndex = patternFiles.indexOf(fileName);
+        const fileIndex = patternFiles.indexOf(baseName);
 
         if (fileIndex !== -1) {
             patternFiles.splice(fileIndex, 1); // Remove if exists
         } else {
-            patternFiles.push(fileName); // Add if doesn't exist
+            patternFiles.push(baseName); // Add if doesn't exist
         }
 
-        // Update input, joining with ', ' and filtering empty strings again
         patternInput.value = patternFiles.filter(Boolean).join(", ");
     }
+
+     // Function to copy the directory structure text (reconstructed)
+    function copyDirectoryStructureText() {
+        const container = document.getElementById('directory-structure-container');
+        if (!container) return;
+
+        let textToCopy = "Directory structure:\n";
+        const lines = container.querySelectorAll('pre[name="tree-line"]');
+        lines.forEach(line => {
+            textToCopy += line.textContent + '\n'; // Get text content of each pre tag
+        });
+
+        const button = document.querySelector('[onclick="copyDirectoryStructureText()"]'); // Target the correct button
+        if (!button) return;
+        const originalContent = button.innerHTML;
+
+        navigator.clipboard.writeText(textToCopy.trim()) // Trim trailing newline
+            .then(() => {
+                button.innerHTML = 'Copied!';
+                setTimeout(() => { button.innerHTML = originalContent; }, 1000);
+            })
+            .catch(err => {
+                button.innerHTML = 'Failed';
+                setTimeout(() => { button.innerHTML = originalContent; }, 1000);
+            });
+    }
+
+    // Copy full digest function needs adjustment if tree is not a simple text area anymore
+    function copyFullDigest() {
+        // Reconstruct tree text
+        const treeContainer = document.getElementById('directory-structure-container');
+        let treeText = "Directory structure:\n";
+        if (treeContainer) {
+            const lines = treeContainer.querySelectorAll('pre[name="tree-line"]');
+            lines.forEach(line => {
+                treeText += line.textContent + '\n';
+            });
+        }
+
+        const filesContent = document.querySelector('.result-text').value;
+        const fullDigest = `${treeText.trim()}\n\n${filesContent}`; // Use reconstructed tree
+        const button = document.querySelector('[onclick="copyFullDigest()"]');
+        const originalText = button.innerHTML;
+
+        navigator.clipboard.writeText(fullDigest).then(() => {
+            button.innerHTML = `
+                <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+                </svg>
+                Copied!
+            `;
+            setTimeout(() => { button.innerHTML = originalText; }, 2000);
+        }).catch(err => {
+            console.error('Failed to copy text: ', err);
+        });
+    }
+
 </script>
 {% if result %}
     <div class="mt-10" data-results>
@@ -41,6 +101,7 @@
             <div class="bg-[#fafafa] rounded-xl border-[3px] border-gray-900 p-6 relative z-20 space-y-6">
                 <div class="grid grid-cols-1 md:grid-cols-12 gap-6">
                     <div class="md:col-span-5">
+                        {# Summary section remains the same #}
                         <div class="flex justify-between items-center mb-4 py-2">
                             <h3 class="text-lg font-bold text-gray-900">Summary</h3>
                         </div>
@@ -49,77 +110,81 @@
                             <textarea class="w-full h-[160px] p-4 bg-[#fff4da] border-[3px] border-gray-900 rounded font-mono text-sm resize-none focus:outline-none relative z-10"
                                       readonly>{{ summary }}</textarea>
                         </div>
-                        {# --- Updated Download Link --- #}
+                        {# Download and Copy All Buttons #}
                         {% if ingest_id and encoded_download_filename %}
                             <div class="relative mt-4 inline-block group">
                                 <div class="w-full h-full rounded bg-gray-900 translate-y-1 translate-x-1 absolute inset-0"></div>
-                                {# Add filename query parameter, using the encoded version #}
                                 <a href="/download/{{ ingest_id }}?filename={{ encoded_download_filename }}"
                                    class="inline-flex items-center px-4 py-2 bg-[#ffc480] border-[3px] border-gray-900 text-gray-900 rounded group-hover:-translate-y-px group-hover:-translate-x-px transition-transform relative z-10">
-                                    <svg class="w-4 h-4 mr-2"
-                                         fill="none"
-                                         stroke="currentColor"
-                                         viewBox="0 0 24 24">
-                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-                                    </svg>
+                                    <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
                                     Download
                                 </a>
                             </div>
-                            {# --- End Updated Download Link --- #}
-                            <div class="relative mt-4 inline-block group ml-4">
-                                <div class="w-full h-full rounded bg-gray-900 translate-y-1 translate-x-1 absolute inset-0"></div>
-                                <button onclick="copyFullDigest()"
-                                        class="inline-flex items-center px-4 py-2 bg-[#ffc480] border-[3px] border-gray-900 text-gray-900 rounded group-hover:-translate-y-px group-hover:-translate-x-px transition-transform relative z-10">
-                                    <svg class="w-4 h-4 mr-2"
-                                         fill="none"
-                                         stroke="currentColor"
-                                         viewBox="0 0 24 24">
-                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" />
-                                    </svg>
-                                    Copy all
-                                </button>
-                            </div>
                         {% endif %}
+                         <div class="relative mt-4 inline-block group {% if ingest_id %}ml-4{% endif %}"> {# Adjust margin based on download button presence #}
+                            <div class="w-full h-full rounded bg-gray-900 translate-y-1 translate-x-1 absolute inset-0"></div>
+                            <button onclick="copyFullDigest()"
+                                    class="inline-flex items-center px-4 py-2 bg-[#ffc480] border-[3px] border-gray-900 text-gray-900 rounded group-hover:-translate-y-px group-hover:-translate-x-px transition-transform relative z-10">
+                                <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" /></svg>
+                                Copy all
+                            </button>
+                        </div>
                     </div>
+                    {# MODIFIED: Directory Structure Section #}
                     <div class="md:col-span-7">
                         <div class="flex justify-between items-center mb-4">
                             <h3 class="text-lg font-bold text-gray-900">Directory Structure</h3>
                             <div class="relative group">
                                 <div class="w-full h-full rounded bg-gray-900 translate-y-1 translate-x-1 absolute inset-0"></div>
-                                <button onclick="copyText('directory-structure')"
+                                {# Updated copy button to call new JS function #}
+                                <button onclick="copyDirectoryStructureText()"
                                         class="px-4 py-2 bg-[#ffc480] border-[3px] border-gray-900 text-gray-900 rounded group-hover:-translate-y-px group-hover:-translate-x-px transition-transform relative z-10 flex items-center gap-2">
-                                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" />
-                                    </svg>
+                                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" /></svg>
                                     Copy
                                 </button>
                             </div>
                         </div>
                         <div class="relative">
                             <div class="w-full h-full rounded bg-gray-900 translate-y-1 translate-x-1 absolute inset-0"></div>
+                            {# Iterate over structured tree_data #}
                             <div class="directory-structure w-full p-4 bg-[#fff4da] border-[3px] border-gray-900 rounded font-mono text-sm resize-y focus:outline-none relative z-10 h-[215px] overflow-auto"
-                                 id="directory-structure-container"
-                                 readonly>
-                                <input type="hidden" id="directory-structure-content" value="{{ tree }}" />
-                                {% for line in tree.splitlines() %}
+                                 id="directory-structure-container" readonly>
+                                {# Removed hidden input for tree content #}
+                                {% for item in tree_data %}
+                                    {# Basic indentation based on depth #}
+                                    {% set indent = ' ' * item.depth * 4 %}
+                                    {# Simple prefix for visual structure - could be enhanced later #}
+                                    {% set prefix = ' ' if item.depth == 0 else ('└─ ' if loop.last else '├─ ') %}
                                     <pre name="tree-line"
-                                         class="cursor-pointer hover:line-through hover:text-gray-500"
-                                         onclick="toggleFile(this)">{{ line }}</pre>
+                                         class="cursor-pointer hover:text-gray-500 {% if item.type == 'DIRECTORY' %}font-medium{% endif %}"
+                                         onclick="toggleFile(this)">{{ indent | safe }}{{ prefix | safe }}{% if not is_local_path and base_repo_url and item.type != 'SYMLINK' and item.path_str -%}
+                                        {# Construct URL only for files/dirs in remote repos #}
+                                        {% set item_type = 'blob' if item.type == 'FILE' else 'tree' %}
+                                        {# Ensure item.path_str is treated as relative #}
+                                        {% set relative_item_path = item.path_str %}
+                                        {# Basic GitHub URL structure assumption #}
+                                        {% set href = base_repo_url ~ '/' ~ item_type ~ '/' ~ repo_ref ~ '/' ~ relative_item_path %}
+                                        <a href="{{ href }}" target="_blank" class="hover:underline">{{ item.name }}</a>
+                                    {%- else -%}
+                                        {{- item.name -}}
+                                    {%- endif -%}
+                                    </pre>
                                 {% endfor %}
                             </div>
                         </div>
                     </div>
+                    {# END MODIFIED: Directory Structure Section #}
                 </div>
+                {# Files Content Section remains the same #}
                 <div>
                     <div class="flex justify-between items-center mb-4">
                         <h3 class="text-lg font-bold text-gray-900">Files Content</h3>
                         <div class="relative group">
                             <div class="w-full h-full rounded bg-gray-900 translate-y-1 translate-x-1 absolute inset-0"></div>
+                            {# Ensure copyText works with the correct class name #}
                             <button onclick="copyText('result-text')"
                                     class="px-4 py-2 bg-[#ffc480] border-[3px] border-gray-900 text-gray-900 rounded group-hover:-translate-y-px group-hover:-translate-x-px transition-transform relative z-10 flex items-center gap-2">
-                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" />
-                                </svg>
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" /></svg>
                                 Copy
                             </button>
                         </div>
@@ -127,7 +192,7 @@
                     <div class="relative">
                         <div class="w-full h-full rounded bg-gray-900 translate-y-1 translate-x-1 absolute inset-0"></div>
                         <textarea class="result-text w-full p-4 bg-[#fff4da] border-[3px] border-gray-900 rounded font-mono text-sm resize-y focus:outline-none relative z-10"
-                                  style="min-height: {{ '600px' if content else 'calc(100vh-800px)' }}"
+                                  style="min-height: {{ '600px' if content else 'calc(100vh - 800px)' }}"
                                   readonly>{{ content }}</textarea>
                     </div>
                 </div>
@@ -135,4 +200,3 @@
         </div>
     </div>
 {% endif %}
-

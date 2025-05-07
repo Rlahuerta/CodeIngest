@@ -1,203 +1,219 @@
-"""Functions to format the output of the ingestion process."""
+# src/CodeIngest/output_formatters.py
+"""Functions to ingest and analyze a codebase directory or single file."""
 
-import os
-import warnings
-from typing import Iterator, List, Optional, Tuple
+from typing import Optional, Tuple, List, Dict, Any # Added List, Dict, Any
+import os # Keep os import
 
 import tiktoken
 
 from CodeIngest.query_parsing import IngestionQuery
 from CodeIngest.schemas import FileSystemNode, FileSystemNodeType
-from CodeIngest.schemas.filesystem_schema import SEPARATOR
 
-MAX_DISPLAY_SIZE: int = 300_000
+# Define a type alias for clarity
+TreeDataItem = Dict[str, Any]
 
-
-def format_node(node: FileSystemNode, query: IngestionQuery) -> Tuple[str, str, str]:
+# MODIFIED: format_node signature and return type
+def format_node(node: FileSystemNode, query: IngestionQuery) -> Tuple[str, List[TreeDataItem], str]:
     """
-    Generate a summary, directory structure, and file contents for a given file system node.
+    Generate a summary, structured tree data, and file contents for a given file system node.
+
+    If the node represents a directory, the function will recursively process its contents.
 
     Parameters
     ----------
     node : FileSystemNode
-        The file system node to be summarized (can be the root of a directory or a single file).
+        The file system node to be summarized.
     query : IngestionQuery
-        The parsed query object containing information about the source and parameters.
+        The parsed query object containing information about the repository and query parameters.
 
     Returns
     -------
-    Tuple[str, str, str]
-        A tuple containing the summary, directory structure, and file contents.
-"""
-    # Determine if the *initial* input source represented a single file
-    is_single_file_input = (query.local_path == node.path and node.type == FileSystemNodeType.FILE)
+    Tuple[str, List[TreeDataItem], str]
+        A tuple containing the summary, a list representing the directory structure data,
+        and the file contents.
+    """
+    is_single_file = node.type == FileSystemNodeType.FILE
+    summary = _create_summary_prefix(query, single_file=is_single_file)
 
-    summary = _create_summary_prefix(query, single_file=is_single_file_input)
+    if node.type == FileSystemNodeType.DIRECTORY:
+        summary += f"Files analyzed: {node.file_count}\n"
+    elif node.type == FileSystemNodeType.FILE:
+        summary += f"File: {node.path_str}\n" # Use path_str for single file summary
+        summary += f"Lines: {len(node.content.splitlines()):,}\n"
 
-    # --- Tree Structure ---
-    if is_single_file_input:
-        tree = f"File: {node.name}\n"
-    else:
-        tree = "Directory structure:\n" + _create_tree_structure(query, node)
+    # MODIFIED: Call the new structure generator
+    tree_data: List[TreeDataItem] = _create_tree_data(node, base_path_str=query.slug)
 
-    # --- Assemble Formatted Content ---
-    content_parts = []
-    total_content_size = 0
-    cropped = False
-    total_files_processed = 0
-    line_count = 0
+    content = _gather_file_contents(node)
 
-    nodes_to_process: List[FileSystemNode] = [node]
-    all_file_chunks: dict[str, List[str]] = {}
-    processed_paths: set[Path] = set() # Use Path object for tracking
-
-    while nodes_to_process:
-        current_node = nodes_to_process.pop(0)
-
-        if current_node.type == FileSystemNodeType.FILE:
-            if current_node.path in processed_paths: continue
-            processed_paths.add(current_node.path)
-
-            try:
-                file_content_list = list(current_node.read_chunks())
-                all_file_chunks[current_node.path_str] = file_content_list
-
-                first_chunk = file_content_list[0] if file_content_list else ""
-                if not first_chunk.startswith("Error:") and first_chunk != "[Non-text file]":
-                    file_content_str_for_lines = "".join(file_content_list)
-                    current_file_lines = file_content_str_for_lines.count('\n')
-                    if file_content_str_for_lines and not file_content_str_for_lines.endswith('\n'):
-                        current_file_lines += 1
-                    # Add to total line count only if it's the single file input
-                    if is_single_file_input and current_node.path == query.local_path:
-                        line_count = current_file_lines
-                total_files_processed += 1
-            except Exception as e:
-                warnings.warn(f"Error reading chunks for {current_node.path_str}: {e}")
-                all_file_chunks[current_node.path_str] = [f"Error reading file content: {e}"]
-                total_files_processed += 1
-
-        elif current_node.type == FileSystemNodeType.DIRECTORY:
-            current_node.sort_children()
-            nodes_to_process = current_node.children + nodes_to_process # DFS
-
-    # --- Build the final content string ---
-    sorted_file_paths = sorted(all_file_chunks.keys())
-
-    for path_str in sorted_file_paths:
-        chunks = all_file_chunks[path_str]
-        header = f"{SEPARATOR}\nFILE: {path_str}\n{SEPARATOR}\n"
-        content_parts.append(header)
-        total_content_size += len(header)
-        if total_content_size > MAX_DISPLAY_SIZE: cropped = True; break
-
-        file_content_str = "".join(chunks)
-        content_parts.append(file_content_str)
-        total_content_size += len(file_content_str)
-
-        content_parts.append("\n\n")
-        total_content_size += 2
-
-        if total_content_size > MAX_DISPLAY_SIZE: cropped = True; break
-
-    # --- Finalize Summary ---
-    if is_single_file_input:
-        summary += f"Lines: {line_count:,}\n" if line_count > 0 else "Lines: N/A\n"
-    else: # Directory or Zip input
-        summary += f"Files analyzed: {total_files_processed}\n"
-
-    content = "".join(content_parts)
-
-    if cropped:
-        item_type = "File" if is_single_file_input else "Files"
-        crop_message = (
-            f"\n({item_type} content cropped to {int(MAX_DISPLAY_SIZE / 1000)}k characters. "
-            f"Download full ingest to see more)\n"
-        )
-        content = crop_message + content[:MAX_DISPLAY_SIZE - len(crop_message)]
-
-    token_estimate = _format_token_count(content)
+    # Estimate tokens based on the content string and a simple representation of the tree
+    # For token estimation, we'll just use the paths from the tree_data
+    tree_paths_for_token = "\n".join([item['path_str'] for item in tree_data])
+    token_estimate = _format_token_count(tree_paths_for_token + content)
     if token_estimate:
         summary += f"\nEstimated tokens: {token_estimate}"
 
-    return summary, tree, content
+    return summary, tree_data, content
 
 
 def _create_summary_prefix(query: IngestionQuery, single_file: bool = False) -> str:
-    """Create summary prefix with repo/dir/zip, branch/commit, subpath info."""
-    parts = []
-    if query.url:
-        # Remote repository
-        parts.append(f"Repository: {query.user_name}/{query.repo_name}")
-        if query.commit: parts.append(f"Commit: {query.commit}")
-        elif query.branch and query.branch.lower() not in ("main", "master"):
-            parts.append(f"Branch: {query.branch}")
-    # --- FIX: Logic refined for local sources ---
-    elif single_file:
-         # If the input was determined to be a single file
-         display_path = str(query.local_path.resolve()) # Show the file path
-         parts.append(f"File: {display_path}")
-    elif query.original_zip_path:
-         # If it came from a zip file
-         display_path = str(query.original_zip_path.resolve()) # Show original zip path
-         parts.append(f"Zip File: {display_path}")
-    else:
-         # Otherwise, it's a directory input
-         display_path = str(query.local_path.resolve()) # Show the directory path
-         parts.append(f"Directory: {display_path}")
-    # --- End FIX ---
+    """
+    Create a prefix string for summarizing a repository or local directory.
 
-    # Subpath only relevant for non-single-file directory/repo/zip sources
+    Includes repository name (if provided), commit/branch details, and subpath if relevant.
+
+    Parameters
+    ----------
+    query : IngestionQuery
+        The parsed query object containing information about the repository and query parameters.
+    single_file : bool
+        A flag indicating whether the summary is for a single file, by default False.
+
+    Returns
+    -------
+    str
+        A summary prefix string containing repository, commit, branch, and subpath details.
+    """
+    parts = []
+
+    if query.user_name and query.repo_name: # Check both exist
+        parts.append(f"Repository: {query.user_name}/{query.repo_name}")
+    else:
+        # Local scenario or incomplete remote info
+        parts.append(f"Source: {query.slug}") # Use slug as fallback
+
+    if query.commit:
+        parts.append(f"Commit: {query.commit}")
+    elif query.branch and query.branch not in ("main", "master"): # Only show non-default branches
+        parts.append(f"Branch: {query.branch}")
+
+    # Only show subpath if it's not the root and not a single file view
     if query.subpath and query.subpath != "/" and not single_file:
-        display_subpath = query.subpath.strip('/')
-        if display_subpath: parts.append(f"Subpath: {display_subpath}")
+        parts.append(f"Subpath: {query.subpath}")
 
     return "\n".join(parts) + "\n"
 
 
-# _create_tree_structure and _format_token_count remain the same
-def _create_tree_structure(query: IngestionQuery, node: FileSystemNode, prefix: str = "", is_last: bool = True) -> str:
-    """Generate a tree-like string representation of the file structure."""
-    node_name = node.name if node.path_str != "." else node.name
+def _gather_file_contents(node: FileSystemNode) -> str:
+    """
+    Recursively gather contents of all files under the given node.
 
-    tree_str = ""
-    current_prefix = "└── " if is_last else "├── "
+    This function recursively processes a directory node and gathers the contents of all files
+    under that node. It returns the concatenated content of all files as a single string.
 
-    display_name = node_name
-    if node.type == FileSystemNodeType.DIRECTORY and node.path_str != ".": display_name += "/"
+    Parameters
+    ----------
+    node : FileSystemNode
+        The current directory or file node being processed.
+
+    Returns
+    -------
+    str
+        The concatenated content of all files under the given node.
+    """
+    # Base case: If it's a file, return its formatted content string
+    if node.type == FileSystemNodeType.FILE:
+        return node.content_string
+    # Base case: If it's a symlink, return its representation (no content traversal)
+    elif node.type == FileSystemNodeType.SYMLINK:
+         return node.content_string # Symlink content string includes link info
+    # Recursive case: If it's a directory, gather content from children
+    elif node.type == FileSystemNodeType.DIRECTORY:
+        # Join contents gathered from each child node
+        return "\n".join(_gather_file_contents(child) for child in node.children)
+    # Fallback for unexpected types
+    return ""
+
+
+# NEW function to create structured tree data
+def _create_tree_data(node: FileSystemNode, base_path_str: str, depth: int = 0) -> List[TreeDataItem]:
+    """
+    Recursively generate structured data representing the file tree.
+
+    Parameters
+    ----------
+    node : FileSystemNode
+        The current directory or file node being processed.
+    base_path_str : str
+        The string representation of the base path (slug) for display.
+    depth : int
+        The current depth in the tree structure.
+
+    Returns
+    -------
+    List[TreeDataItem]
+        A list of dictionaries, where each dictionary represents a node in the tree.
+    """
+    tree_list: List[TreeDataItem] = []
+
+    # Determine display name and node type string
+    display_name = node.name
+    node_type_str = node.type.name # e.g., "FILE", "DIRECTORY", "SYMLINK"
+    link_target = ""
+    if node.type == FileSystemNodeType.DIRECTORY:
+        display_name += "/"
     elif node.type == FileSystemNodeType.SYMLINK:
         try:
-            target_path = node.path.readlink()
-            try:
-                base_for_rel_link = query.local_path.parent
-                rel_target = target_path.resolve().relative_to(base_for_rel_link.resolve())
-                display_name += f" -> {str(rel_target)}"
-            except (ValueError, OSError): display_name += f" -> {str(target_path)}"
-        except OSError: display_name += " -> [Broken Symlink]"
-        except Exception as e: warnings.warn(f"Error reading link target for {node.path}: {e}"); display_name += " -> [Error reading link]"
+            link_target = node.path.readlink().as_posix() # Get target path as string
+            display_name += f" -> {link_target}"
+        except OSError:
+             display_name += " -> [Broken Link]"
+             link_target = "[Broken Link]"
 
-    line_prefix = prefix if node.path_str != "." else ""
-    tree_str += f"{line_prefix}{current_prefix}{display_name}\n"
+    # Use node.path_str which should be the relative path
+    # Handle the root node case where path_str might be empty or '.'
+    relative_path = node.path_str if node.path_str and node.path_str != '.' else (node.name or base_path_str)
 
+    # Add current node to the list
+    tree_list.append({
+        "name": display_name,
+        "type": node_type_str,
+        "path_str": relative_path.replace(os.sep, '/'), # Ensure POSIX paths
+        "depth": depth,
+        "link_target": link_target, # Add link target info
+    })
+
+    # Recursively process children if it's a directory
     if node.type == FileSystemNodeType.DIRECTORY and node.children:
-        new_prefix = prefix + ("    " if is_last else "│   ")
-        if node.path_str == ".": new_prefix = ""
+        # Children are already sorted by FileSystemNode.sort_children()
+        for child in node.children:
+            tree_list.extend(_create_tree_data(child, base_path_str, depth + 1))
 
-        processable_children = node.children
-        for i, child in enumerate(processable_children):
-            tree_str += _create_tree_structure(query, node=child, prefix=new_prefix, is_last=i == len(processable_children) - 1)
-    return tree_str
+    return tree_list
 
 
+# This function remains mostly the same, just estimating tokens differently
 def _format_token_count(text: str) -> Optional[str]:
-    """Estimate token count and format it."""
+    """
+    Return a human-readable string representing the token count of the given text.
+
+    E.g., '120' -> '120', '1200' -> '1.2k', '1200000' -> '1.2M'.
+
+    Parameters
+    ----------
+    text : str
+        The text string for which the token count is to be estimated.
+
+    Returns
+    -------
+    str, optional
+        The formatted number of tokens as a string (e.g., '1.2k', '1.2M'), or `None` if an error occurs.
+    """
     try:
         encoding = tiktoken.get_encoding("cl100k_base")
-        tokens = encoding.encode(text, disallowed_special=())
-        total_tokens = len(tokens)
-    except Exception as e: warnings.warn(f"Could not estimate token count: {e}", UserWarning); return None
+        total_tokens = len(encoding.encode(text, disallowed_special=()))
+    except (ValueError, UnicodeEncodeError, tiktoken.registry.InvalidEncodingError) as exc: # Added InvalidEncodingError
+        print(f"Warning: Could not estimate token count. Tokenizer error: {exc}")
+        return None
+    except Exception as exc: # Catch other potential errors during encoding
+         print(f"Warning: An unexpected error occurred during token estimation: {exc}")
+         return None
 
-    if total_tokens == 0: return "0"
-    if total_tokens >= 1_000_000: return f"{total_tokens / 1_000_000:.1f}M"
-    if total_tokens >= 1_000: return f"{total_tokens / 1_000:.1f}k"
+
+    if total_tokens >= 1_000_000:
+        return f"{total_tokens / 1_000_000:.1f}M"
+
+    if total_tokens >= 1_000:
+        return f"{total_tokens / 1_000:.1f}k"
+
     return str(total_tokens)

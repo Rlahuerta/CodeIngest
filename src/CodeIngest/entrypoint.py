@@ -4,13 +4,13 @@
 import asyncio
 import inspect
 import shutil
-from typing import Optional, Set, Tuple, Union
+from typing import Optional, Set, Tuple, Union, List, Dict, Any # Added List, Dict, Any
 
 from CodeIngest.cloning import clone_repo
 from CodeIngest.config import TMP_BASE_PATH
 from CodeIngest.ingestion import ingest_query
 from CodeIngest.query_parsing import IngestionQuery, parse_query
-
+from CodeIngest.output_formatters import TreeDataItem # Import the type alias
 
 async def ingest_async(
     source: str,
@@ -19,13 +19,14 @@ async def ingest_async(
     exclude_patterns: Optional[Union[str, Set[str]]] = None,
     branch: Optional[str] = None,
     output: Optional[str] = None,
-) -> Tuple[str, str, str, IngestionQuery]: # MODIFIED: Return IngestionQuery object
+# MODIFIED: Updated return type hint for tree_data
+) -> Tuple[str, List[TreeDataItem], str, IngestionQuery]:
     """
     Main entry point for ingesting a source and processing its contents.
 
     This function analyzes a source (URL or local path), clones the corresponding repository (if applicable),
-    and processes its files according to the specified query parameters. It returns a summary, a tree-like
-    structure of the files, the content of the files, and the IngestionQuery object used.
+    and processes its files according to the specified query parameters. It returns a summary, structured
+    tree data, the content of the files, and the IngestionQuery object used.
     The results can optionally be written to an output file.
 
     Parameters
@@ -46,10 +47,10 @@ async def ingest_async(
 
     Returns
     -------
-    Tuple[str, str, str, IngestionQuery] # MODIFIED
+    Tuple[str, List[TreeDataItem], str, IngestionQuery] # MODIFIED
         A tuple containing:
         - A summary string of the analyzed repository or directory.
-        - A tree-like string representation of the file structure.
+        - A list of dictionaries representing the tree structure.
         - The content of the files in the repository or directory.
         - The IngestionQuery object used for this ingestion.
 
@@ -74,51 +75,50 @@ async def ingest_async(
         )
 
         # --- Conditional Cloning ---
-        # Only clone if the source was identified as a remote URL
         if query.url:
-            # Prioritize the explicit branch argument over any branch parsed from the URL
             selected_branch = branch if branch else query.branch
             query.branch = selected_branch # Update query with the selected branch
 
             clone_config = query.extract_clone_config()
-            # Clone the remote repository to a temporary local path
             clone_coroutine = clone_repo(clone_config)
 
-            # Ensure clone_repo returns a coroutine and run it
             if inspect.iscoroutine(clone_coroutine):
-                # Await if an event loop is running, otherwise run synchronously
-                if asyncio.get_event_loop().is_running():
-                    await clone_coroutine
-                else:
-                    asyncio.run(clone_coroutine) # Should ideally not happen in async context
+                await clone_coroutine # Simpler await now
             else:
                 raise TypeError("clone_repo did not return a coroutine as expected.")
 
-            repo_cloned = True # Mark that a temporary clone was made
+            repo_cloned = True
 
         # --- Ingestion ---
-        # Ingest the content from the local path (either the original path or the temporary clone)
-        summary, tree, content = ingest_query(query)
+        # MODIFIED: ingest_query now returns tree_data (list) instead of tree (string)
+        summary, tree_data, content = ingest_query(query)
 
         # --- Output ---
-        # Write the results to the specified output file if requested
         if output is not None:
+             # Recreate simple text tree for file output if needed, or save structured?
+             # For simplicity, let's just save summary and content to file.
             with open(output, "w", encoding="utf-8") as f:
-                f.write(tree + "\n" + content)
+                 f.write(summary + "\n\n")
+                 # Recreate a basic text tree for the file output
+                 text_tree_for_file = "Directory structure:\n"
+                 for item in tree_data:
+                     indent = "    " * item['depth']
+                     prefix = "└── " # Simplified prefix for file output
+                     text_tree_for_file += f"{indent}{prefix}{item['name']}\n"
+                 f.write(text_tree_for_file)
+                 f.write("\n" + content)
 
-        return summary, tree, content, query # MODIFIED: Return the query object
+
+        return summary, tree_data, content, query # MODIFIED: Return tree_data list
 
     finally:
         # --- Cleanup ---
-        # Clean up the temporary cloned repository directory ONLY if a remote repository was cloned.
-        # The parent ID-based directory (query.local_path.parent) is left for the server
-        # to manage if it stores other artifacts there (like digest.txt).
         if repo_cloned and query and query.local_path.is_relative_to(TMP_BASE_PATH):
-             # Double-check it's within the expected temp base path before removing
-            if query.local_path.exists(): # Check if the specific clone path exists
-                shutil.rmtree(query.local_path, ignore_errors=True) # MODIFIED: Remove only query.local_path
+            if query.local_path.exists():
+                shutil.rmtree(query.local_path, ignore_errors=True)
 
 
+# MODIFIED: Update return type hint for ingest function
 def ingest(
     source: str,
     max_file_size: int = 10 * 1024 * 1024,  # 10 MB
@@ -126,52 +126,39 @@ def ingest(
     exclude_patterns: Optional[Union[str, Set[str]]] = None,
     branch: Optional[str] = None,
     output: Optional[str] = None,
-) -> Tuple[str, str, str, IngestionQuery]: # MODIFIED: Return IngestionQuery object
+) -> Tuple[str, List[TreeDataItem], str, IngestionQuery]:
     """
     Synchronous version of ingest_async.
 
-    This function analyzes a source (URL or local path), clones the corresponding repository (if applicable),
-    and processes its files according to the specified query parameters. It returns a summary, a tree-like
-    structure of the files, the content of the files, and the IngestionQuery object used.
-    The results can optionally be written to an output file.
+    Returns structured tree data instead of a formatted string.
 
     Parameters
     ----------
     source : str
-        The source to analyze, which can be a URL (for a Git repository) or a local directory path.
+        The source to analyze.
     max_file_size : int
-        Maximum allowed file size for file ingestion. Files larger than this size are ignored, by default
-        10*1024*1024 (10 MB).
+        Maximum allowed file size.
     include_patterns : Union[str, Set[str]], optional
-        Pattern or set of patterns specifying which files to include. If `None`, all files are included.
+        Patterns to include.
     exclude_patterns : Union[str, Set[str]], optional
-        Pattern or set of patterns specifying which files to exclude. If `None`, no files are excluded.
+        Patterns to exclude.
     branch : str, optional
-        The branch to clone and ingest. If `None`, the default branch is used.
+        Branch to clone.
     output : str, optional
-        File path where the summary and content should be written. If `None`, the results are not written to a file.
+        Output file path.
 
     Returns
     -------
-    Tuple[str, str, str, IngestionQuery] # MODIFIED
-        A tuple containing:
-        - A summary string of the analyzed repository or directory.
-        - A tree-like string representation of the file structure.
-        - The content of the files in the repository or directory.
-        - The IngestionQuery object used for this ingestion.
-
-    See Also
-    --------
-    ingest_async : The asynchronous version of this function.
+    Tuple[str, List[TreeDataItem], str, IngestionQuery] # MODIFIED
+        Summary, structured tree data, content, and query object.
     """
     # Run the asynchronous version within the current event loop or create a new one
-    # Check if an event loop is already running
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError: # No running event loop
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        return loop.run_until_complete( # MODIFIED: Directly return the result
+        return loop.run_until_complete(
              ingest_async(
                 source=source,
                 max_file_size=max_file_size,
@@ -182,11 +169,7 @@ def ingest(
             )
         )
     else:
-        # If a loop is running, use ensure_future or create_task depending on context
-        # This part might need adjustment based on how/where `ingest` is called
-        # For simplicity, we'll assume run_until_complete is acceptable here too,
-        # but in complex async apps, you might need `asyncio.ensure_future`.
-         return loop.run_until_complete( # MODIFIED: Directly return the result
+         return loop.run_until_complete(
              ingest_async(
                 source=source,
                 max_file_size=max_file_size,
