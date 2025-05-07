@@ -1,8 +1,8 @@
 # src/server/routers/index.py
 """This module defines the FastAPI router for the home page of the application."""
 
-from typing import Optional # Add Optional
-from fastapi import APIRouter, Form, Request, File, UploadFile # Add File, UploadFile
+from typing import Optional # Added Optional
+from fastapi import APIRouter, Form, Request, File, UploadFile # Added File, UploadFile
 from fastapi.responses import HTMLResponse
 
 from server.query_processor import process_query
@@ -39,13 +39,8 @@ async def home(request: Request) -> HTMLResponse:
             "default_file_size": 243,
             # Initialize branch_or_tag for the template context on GET
             "branch_or_tag": "",
-            # Initialize repo_url as empty for the index page GET request
-            "repo_url": "",
-            # Initialize pattern and pattern_type
-            "pattern": "",
-            "pattern_type": "exclude",
-            # Default source type for GET request
-            "source_type": "url_path",
+             # Initialize source_type (assuming URL/Path is default)
+            "source_type": "url_path", # Default for initial view
         },
     )
 

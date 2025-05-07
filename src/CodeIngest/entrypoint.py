@@ -4,168 +4,195 @@
 import asyncio
 import inspect
 import shutil
-from pathlib import Path
 from typing import Optional, Set, Tuple, Union
 
 from CodeIngest.cloning import clone_repo
-from CodeIngest.config import TMP_BASE_PATH, OUTPUT_FILE_NAME
+from CodeIngest.config import TMP_BASE_PATH
 from CodeIngest.ingestion import ingest_query
 from CodeIngest.query_parsing import IngestionQuery, parse_query
-from CodeIngest.utils.ignore_patterns import DEFAULT_IGNORE_PATTERNS # Import defaults
 
 
 async def ingest_async(
     source: str,
     max_file_size: int = 10 * 1024 * 1024,  # 10 MB
-    include_patterns: Optional[Set[str]] = None,
-    exclude_patterns: Optional[Set[str]] = None,
+    include_patterns: Optional[Union[str, Set[str]]] = None,
+    exclude_patterns: Optional[Union[str, Set[str]]] = None,
     branch: Optional[str] = None,
     output: Optional[str] = None,
-) -> Tuple[str, str, str]:
+) -> Tuple[str, str, str, IngestionQuery]: # MODIFIED: Return IngestionQuery object
     """
     Main entry point for ingesting a source and processing its contents.
+
+    This function analyzes a source (URL or local path), clones the corresponding repository (if applicable),
+    and processes its files according to the specified query parameters. It returns a summary, a tree-like
+    structure of the files, the content of the files, and the IngestionQuery object used.
+    The results can optionally be written to an output file.
 
     Parameters
     ----------
     source : str
-        Source URL, local directory path, or local .zip file path.
+        The source to analyze, which can be a URL (for a Git repository) or a local directory path.
     max_file_size : int
-        Maximum allowed file size.
-    include_patterns : Set[str], optional
-        Set of patterns specifying which files to include. If provided, only matching files are processed.
-    exclude_patterns : Set[str], optional
-        Set of patterns specifying which files to exclude. If provided, these are used instead of defaults.
+        Maximum allowed file size for file ingestion. Files larger than this size are ignored, by default
+        10*1024*1024 (10 MB).
+    include_patterns : Union[str, Set[str]], optional
+        Pattern or set of patterns specifying which files to include. If `None`, all files are included.
+    exclude_patterns : Union[str, Set[str]], optional
+        Pattern or set of patterns specifying which files to exclude. If `None`, no files are excluded.
     branch : str, optional
-        Branch to clone (URL source only).
+        The branch to clone and ingest. If `None`, the default branch is used.
     output : str, optional
-        File path for output.
+        File path where the summary and content should be written. If `None`, the results are not written to a file.
 
     Returns
     -------
-    Tuple[str, str, str]
-        Summary, tree, and content.
+    Tuple[str, str, str, IngestionQuery] # MODIFIED
+        A tuple containing:
+        - A summary string of the analyzed repository or directory.
+        - A tree-like string representation of the file structure.
+        - The content of the files in the repository or directory.
+        - The IngestionQuery object used for this ingestion.
 
     Raises
     ------
-    TypeError, ValueError
+    TypeError
+        If `clone_repo` does not return a coroutine, or if the `source` is of an unsupported type.
+    ValueError
+        If the source path does not exist or other parsing/ingestion errors occur.
     """
     repo_cloned = False
-    zip_extracted = False
-    query: Optional[IngestionQuery] = None
+    query: Optional[IngestionQuery] = None # Initialize query to None
 
     try:
-        # --- Determine Final Patterns ---
-        final_ignore_patterns = DEFAULT_IGNORE_PATTERNS.copy()
-        final_include_patterns = None
-
-        if exclude_patterns is not None:
-            final_ignore_patterns = exclude_patterns
-            final_include_patterns = include_patterns
-        elif include_patterns is not None:
-            final_include_patterns = include_patterns
-
-        # --- Parse Query ---
+        # Parse the source (URL or local path) into a query object
         query = await parse_query(
             source=source,
             max_file_size=max_file_size,
-            from_web=False,
-            include_patterns=final_include_patterns,
-            ignore_patterns=final_ignore_patterns,
+            from_web=False, # Assume not from web initially; parse_query will detect URLs
+            include_patterns=include_patterns,
+            ignore_patterns=exclude_patterns,
         )
 
-        zip_extracted = query.temp_extract_path is not None
-
         # --- Conditional Cloning ---
+        # Only clone if the source was identified as a remote URL
         if query.url:
+            # Prioritize the explicit branch argument over any branch parsed from the URL
             selected_branch = branch if branch else query.branch
-            if selected_branch and selected_branch != query.branch:
-                 query.branch = selected_branch
+            query.branch = selected_branch # Update query with the selected branch
 
             clone_config = query.extract_clone_config()
+            # Clone the remote repository to a temporary local path
             clone_coroutine = clone_repo(clone_config)
 
-            # --- FIX: Always await, never call asyncio.run() here ---
+            # Ensure clone_repo returns a coroutine and run it
             if inspect.iscoroutine(clone_coroutine):
-                 await clone_coroutine # Assume we are already in a running loop
+                # Await if an event loop is running, otherwise run synchronously
+                if asyncio.get_event_loop().is_running():
+                    await clone_coroutine
+                else:
+                    asyncio.run(clone_coroutine) # Should ideally not happen in async context
             else:
-                # This case should ideally not happen if clone_repo is always async
                 raise TypeError("clone_repo did not return a coroutine as expected.")
-            # --- End FIX ---
 
-            repo_cloned = True
+            repo_cloned = True # Mark that a temporary clone was made
 
         # --- Ingestion ---
+        # Ingest the content from the local path (either the original path or the temporary clone)
         summary, tree, content = ingest_query(query)
 
         # --- Output ---
+        # Write the results to the specified output file if requested
         if output is not None:
-            output_filename = f"{query.slug}.txt" if output == OUTPUT_FILE_NAME else output
-            output_path = Path(output_filename)
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-
-            with open(output_path, "w", encoding="utf-8") as f:
+            with open(output, "w", encoding="utf-8") as f:
                 f.write(tree + "\n" + content)
-            print(f"Output written to: {output_path}")
 
-        return summary, tree, content
+        return summary, tree, content, query # MODIFIED: Return the query object
 
     finally:
         # --- Cleanup ---
+        # Clean up the temporary cloned repository directory ONLY if a remote repository was cloned.
+        # The parent ID-based directory (query.local_path.parent) is left for the server
+        # to manage if it stores other artifacts there (like digest.txt).
         if repo_cloned and query and query.local_path.is_relative_to(TMP_BASE_PATH):
-            print(f"Cleaning up cloned repo temp dir: {query.local_path.parent}")
-            shutil.rmtree(query.local_path.parent, ignore_errors=True)
-
-        if zip_extracted and query and query.temp_extract_path and query.temp_extract_path.is_relative_to(TMP_BASE_PATH):
-            if query.temp_extract_path.exists():
-                 print(f"Cleaning up zip extraction temp dir: {query.temp_extract_path.parent}")
-                 shutil.rmtree(query.temp_extract_path.parent, ignore_errors=True)
+             # Double-check it's within the expected temp base path before removing
+            if query.local_path.exists(): # Check if the specific clone path exists
+                shutil.rmtree(query.local_path, ignore_errors=True) # MODIFIED: Remove only query.local_path
 
 
 def ingest(
     source: str,
     max_file_size: int = 10 * 1024 * 1024,  # 10 MB
-    include_patterns: Optional[Set[str]] = None,
-    exclude_patterns: Optional[Set[str]] = None,
+    include_patterns: Optional[Union[str, Set[str]]] = None,
+    exclude_patterns: Optional[Union[str, Set[str]]] = None,
     branch: Optional[str] = None,
     output: Optional[str] = None,
-) -> tuple[str, str, str] | None:
+) -> Tuple[str, str, str, IngestionQuery]: # MODIFIED: Return IngestionQuery object
     """
     Synchronous version of ingest_async.
-    """
-    try:
-        # Check if a loop is already running in this thread
-        loop = asyncio.get_running_loop()
-        # If yes, schedule ingest_async within it (e.g., using ensure_future or similar,
-        # but run_until_complete might work if called from the loop's thread context,
-        # though it's generally for starting/stopping loops).
-        # For simplicity in this context, we'll assume run_until_complete is acceptable.
-        return loop.run_until_complete(
-             ingest_async(
-                 source=source,
-                 max_file_size=max_file_size,
-                 include_patterns=include_patterns,
-                 exclude_patterns=exclude_patterns,
-                 branch=branch,
-                 output=output,
-             )
-         )
-    except RuntimeError: # No running event loop in this thread
-        # Create a new loop, run ingest_async, and close the loop
-        # Note: asyncio.run() is the preferred way for this in Python 3.7+
-        # Let's revert to using asyncio.run() here as it handles setup/teardown.
-        try:
-            return asyncio.run(
-                 ingest_async(
-                     source=source,
-                     max_file_size=max_file_size,
-                     include_patterns=include_patterns,
-                     exclude_patterns=exclude_patterns,
-                     branch=branch,
-                     output=output,
-                 )
-             )
-        except Exception as e:
-             # Handle potential exceptions during async execution if needed
-             print(f"Error during synchronous execution via asyncio.run: {e}")
-             return None
 
+    This function analyzes a source (URL or local path), clones the corresponding repository (if applicable),
+    and processes its files according to the specified query parameters. It returns a summary, a tree-like
+    structure of the files, the content of the files, and the IngestionQuery object used.
+    The results can optionally be written to an output file.
+
+    Parameters
+    ----------
+    source : str
+        The source to analyze, which can be a URL (for a Git repository) or a local directory path.
+    max_file_size : int
+        Maximum allowed file size for file ingestion. Files larger than this size are ignored, by default
+        10*1024*1024 (10 MB).
+    include_patterns : Union[str, Set[str]], optional
+        Pattern or set of patterns specifying which files to include. If `None`, all files are included.
+    exclude_patterns : Union[str, Set[str]], optional
+        Pattern or set of patterns specifying which files to exclude. If `None`, no files are excluded.
+    branch : str, optional
+        The branch to clone and ingest. If `None`, the default branch is used.
+    output : str, optional
+        File path where the summary and content should be written. If `None`, the results are not written to a file.
+
+    Returns
+    -------
+    Tuple[str, str, str, IngestionQuery] # MODIFIED
+        A tuple containing:
+        - A summary string of the analyzed repository or directory.
+        - A tree-like string representation of the file structure.
+        - The content of the files in the repository or directory.
+        - The IngestionQuery object used for this ingestion.
+
+    See Also
+    --------
+    ingest_async : The asynchronous version of this function.
+    """
+    # Run the asynchronous version within the current event loop or create a new one
+    # Check if an event loop is already running
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError: # No running event loop
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        return loop.run_until_complete( # MODIFIED: Directly return the result
+             ingest_async(
+                source=source,
+                max_file_size=max_file_size,
+                include_patterns=include_patterns,
+                exclude_patterns=exclude_patterns,
+                branch=branch,
+                output=output,
+            )
+        )
+    else:
+        # If a loop is running, use ensure_future or create_task depending on context
+        # This part might need adjustment based on how/where `ingest` is called
+        # For simplicity, we'll assume run_until_complete is acceptable here too,
+        # but in complex async apps, you might need `asyncio.ensure_future`.
+         return loop.run_until_complete( # MODIFIED: Directly return the result
+             ingest_async(
+                source=source,
+                max_file_size=max_file_size,
+                include_patterns=include_patterns,
+                exclude_patterns=exclude_patterns,
+                branch=branch,
+                output=output,
+            )
+        )
