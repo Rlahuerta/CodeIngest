@@ -1,3 +1,4 @@
+# src/server/routers/dynamic.py
 """This module defines the dynamic router for handling dynamic path requests."""
 
 from fastapi import APIRouter, Form, Request
@@ -38,10 +39,12 @@ async def catch_all(request: Request, full_path: str) -> HTMLResponse:
         "git.jinja",
         {
             "request": request,
-            "repo_url": full_path,
+            "repo_url": full_path, # This is treated as input_text implicitly
             "loading": True,
             "default_file_size": 243,
             "branch_or_tag": "", # Initialize as empty for GET request
+            "pattern": "", # Initialize pattern
+            "pattern_type": "exclude", # Default pattern type
         },
     )
 
@@ -50,10 +53,12 @@ async def catch_all(request: Request, full_path: str) -> HTMLResponse:
 @limiter.limit("10/minute")
 async def process_catch_all(
     request: Request,
+    # Assuming source_type is always 'url_path' for dynamic routes
+    # and input_text comes from the form.
     input_text: str = Form(...),
     max_file_size: int = Form(...),
     pattern_type: str = Form(...),
-    pattern: str = Form(...),
+    pattern: str = Form(""), # Default pattern to empty string
     branch_or_tag: str = Form(""), # Add new form field, default to empty string
 ) -> HTMLResponse:
     """
@@ -82,13 +87,17 @@ async def process_catch_all(
     HTMLResponse
         The rendered results page or the form with an error message.
     """
-    # --- FIX: Pass branch_or_tag to process_query ---
+    # Pass parameters to process_query
+    # Set source_type explicitly for URL/path processing
+    # zip_file is None as this endpoint doesn't handle uploads
     return await process_query(
         request=request,
+        source_type="url_path", # Explicitly set for dynamic routes
         input_text=input_text,
+        zip_file=None,          # No zip file upload here
         slider_position=max_file_size, # Pass slider position
         pattern_type=pattern_type,
         pattern=pattern,
         branch_or_tag=branch_or_tag, # Pass the branch/tag
-        is_index=False,
+        is_index=False, # Indicate this is not the index page handler
     )

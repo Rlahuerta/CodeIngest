@@ -46,7 +46,7 @@ class IngestionQuery(BaseModel):  # pylint: disable=too-many-instance-attributes
 
     user_name: Optional[str] = None
     repo_name: Optional[str] = None
-    local_path: Path
+    local_path: Path # This will point to the actual dir to ingest (original or temp extract)
     url: Optional[str] = None
     slug: str
     id: str
@@ -57,6 +57,9 @@ class IngestionQuery(BaseModel):  # pylint: disable=too-many-instance-attributes
     max_file_size: int = Field(default=MAX_FILE_SIZE)
     ignore_patterns: Optional[Set[str]] = None
     include_patterns: Optional[Set[str]] = None
+    # --- Added fields for zip handling ---
+    original_zip_path: Optional[Path] = None # Stores the path to the original zip if source was a zip
+    temp_extract_path: Optional[Path] = None # Stores the path to the temp dir if extracted from zip
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
@@ -75,11 +78,12 @@ class IngestionQuery(BaseModel):  # pylint: disable=too-many-instance-attributes
             If the 'url' parameter is not provided.
         """
         if not self.url:
-            raise ValueError("The 'url' parameter is required.")
+            # Changed error message slightly to reflect it's for remote cloning
+            raise ValueError("Clone config can only be extracted for remote repository URLs.")
 
         return CloneConfig(
             url=self.url,
-            local_path=str(self.local_path),
+            local_path=str(self.local_path), # Note: for remote, local_path is already the temp clone dir
             commit=self.commit,
             branch=self.branch,
             subpath=self.subpath,

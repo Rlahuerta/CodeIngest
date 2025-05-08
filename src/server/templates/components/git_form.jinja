@@ -1,4 +1,27 @@
+{# src/server/templates/components/git_form.jinja #}
 <script>
+    // JavaScript function to toggle input visibility based on radio selection
+    // Will be added/updated in utils.js later
+    function toggleSourceInput(type) {
+        const urlPathInputDiv = document.getElementById('urlPathInputDiv');
+        const zipFileInputDiv = document.getElementById('zipFileInputDiv');
+        const urlPathInput = document.getElementById('input_text');
+        const zipFileInput = document.getElementById('zip_file_input');
+
+        if (type === 'url_path') {
+            urlPathInputDiv.style.display = 'block';
+            zipFileInputDiv.style.display = 'none';
+            urlPathInput.required = true; // Make URL/Path required
+            zipFileInput.required = false; // Make ZIP not required
+        } else if (type === 'zip_file') {
+            urlPathInputDiv.style.display = 'none';
+            zipFileInputDiv.style.display = 'block';
+            urlPathInput.required = false; // Make URL/Path not required
+            zipFileInput.required = true; // Make ZIP required
+        }
+    }
+
+    // Pattern change function (remains the same)
     function changePattern(element) {
         console.log("Pattern changed", element.value);
         let patternType = element.value;
@@ -25,14 +48,32 @@
              alt="Decorative Shape"
              class="absolute md:block hidden left-0 h-[4.5rem] w-[4.5rem] bottom-0 -translate-x-full ml-3">
         {# --- Form Start --- #}
+        {# Update form to include enctype for file uploads #}
         <form class="space-y-5"
               id="ingestForm"
+              method="post" {# Ensure method is POST #}
+              enctype="multipart/form-data" {# Necessary for file uploads #}
               onsubmit="handleSubmit(event{% if is_index %}, true{% endif %})">
+
+            {# --- Row 0: Source Type Selection --- #}
+            <div class="mb-4">
+                <label class="block text-sm font-medium text-gray-700 mb-2">Select Source Type:</label>
+                <div class="flex items-center space-x-4">
+                    <label class="inline-flex items-center">
+                        <input type="radio" class="form-radio text-[#FE4A60] focus:ring-[#FE4A60]" name="source_type" value="url_path" {% if source_type == 'url_path' or not source_type %}checked{% endif %} onchange="toggleSourceInput('url_path')">
+                        <span class="ml-2 text-gray-800">URL / Local Path</span>
+                    </label>
+                    <label class="inline-flex items-center">
+                        <input type="radio" class="form-radio text-[#FE4A60] focus:ring-[#FE4A60]" name="source_type" value="zip_file" {% if source_type == 'zip_file' %}checked{% endif %} onchange="toggleSourceInput('zip_file')">
+                        <span class="ml-2 text-gray-800">Upload ZIP File</span>
+                    </label>
+                </div>
+            </div>
 
             {# --- Row 1: URL/Path and Branch/Tag/Commit --- #}
             <div class="flex md:flex-row flex-col w-full h-full justify-center items-start space-y-5 md:space-y-0 md:space-x-5">
-                {# URL/Path Input Group #}
-                <div class="w-full h-full flex-grow">
+                {# URL/Path Input Group - Visibility toggled by JS #}
+                <div class="w-full h-full flex-grow" id="urlPathInputDiv" {% if source_type != 'url_path' and source_type %}style="display: none;"{% endif %}>
                     <label for="input_text" class="block text-sm font-medium text-gray-700 mb-1">Repository URL or Local Path</label>
                     <div class="relative"> {# Relative container for input + effect #}
                         <div class="w-full h-full rounded bg-gray-900 translate-y-1 translate-x-1 absolute inset-0 z-10"></div>
@@ -41,11 +82,30 @@
                                id="input_text"
                                placeholder="https://github.com/... or /path/to/repo"
                                value="{{ repo_url if repo_url else '' }}"
-                               required {# This field IS required #}
+                               {% if source_type == 'url_path' or not source_type %}required{% endif %} {# Required toggled by JS #}
                                class="border-[3px] w-full relative z-20 border-gray-900 placeholder-gray-600 text-lg font-medium focus:outline-none py-3.5 px-6 rounded">
                     </div>
                 </div>
-                {# Branch/Tag/Commit Input Group #}
+
+                {# ZIP File Input Group - Visibility toggled by JS #}
+                <div class="w-full h-full flex-grow" id="zipFileInputDiv" {% if source_type != 'zip_file' %}style="display: none;"{% endif %}>
+                    <label for="zip_file_input" class="block text-sm font-medium text-gray-700 mb-1">Select ZIP File</label>
+                    <div class="relative"> {# Relative container for input + effect #}
+                         <div class="w-full h-full rounded bg-gray-900 translate-y-1 translate-x-1 absolute inset-0 z-10"></div>
+                         {# Style the file input to look consistent #}
+                         <input type="file"
+                                name="zip_file" {# Name matches backend expected parameter #}
+                                id="zip_file_input"
+                                accept=".zip" {# Filter for zip files #}
+                                {% if source_type == 'zip_file' %}required{% endif %} {# Required toggled by JS #}
+                                class="block w-full relative z-20 text-lg text-gray-900 border-[3px] border-gray-900 rounded cursor-pointer bg-white focus:outline-none
+                                       file:mr-4 file:py-3.5 file:px-6 file:rounded-l-sm file:border-0 file:border-r-[3px] file:border-gray-900
+                                       file:text-lg file:font-medium file:bg-[#e6e8eb] file:text-gray-700 hover:file:bg-[#dcdcdc]">
+                    </div>
+                     <p class="mt-1 text-xs text-gray-500">Upload a .zip archive containing the code repository.</p>
+                </div>
+
+                {# Branch/Tag/Commit Input Group (Remains the same) #}
                 <div class="w-full md:w-1/3 h-full">
                      <label for="branch_or_tag" class="block text-sm font-medium text-gray-700 mb-1">Branch / Tag / Commit</label>
                     <div class="relative"> {# Relative container for input + effect #}
@@ -60,7 +120,7 @@
                 </div>
             </div>
 
-            {# --- Row 2: Patterns, Size Slider, Submit Button --- #}
+            {# --- Row 2: Patterns, Size Slider, Submit Button (Remains the same) --- #}
             <div class="flex flex-wrap gap-x-5 gap-y-4 items-end justify-between">
                  {# Pattern Selector Group #}
                 <div class="w-full sm:w-auto flex-grow sm:flex-grow-0 min-w-[250px]">

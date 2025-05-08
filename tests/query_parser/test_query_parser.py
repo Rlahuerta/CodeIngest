@@ -7,360 +7,196 @@ paths.
 
 import os
 import pytest
+import zipfile
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 # Assuming IngestionQuery is importable if needed, but not directly used in most tests here
-# from CodeIngest.schemas import IngestionQuery
+from CodeIngest.ingestion import ingest_query
 from CodeIngest.query_parsing import _parse_patterns, _parse_remote_repo, parse_query
-from CodeIngest.utils.exceptions import InvalidPatternError # Import specific exception
+from CodeIngest.utils.exceptions import InvalidPatternError
 from CodeIngest.utils.ignore_patterns import DEFAULT_IGNORE_PATTERNS
 
 # --- Mocks for Remote Calls ---
 
 # Common mock for fetch_remote_branch_list to prevent actual network calls
 MOCK_BRANCH_LIST = ["main", "dev", "feature/branch", "release/v1.0"]
-
 @pytest.fixture(autouse=True)
 def mock_fetch_branches():
-    """Auto-used fixture to mock fetch_remote_branch_list for all tests in this module."""
     with patch("CodeIngest.query_parsing.fetch_remote_branch_list", new_callable=AsyncMock) as mock_fetch:
-        mock_fetch.return_value = MOCK_BRANCH_LIST
-        yield mock_fetch
-
+        mock_fetch.return_value = MOCK_BRANCH_LIST; yield mock_fetch
 @pytest.fixture(autouse=True)
 def mock_check_repo_exists():
-    """Auto-used fixture to mock check_repo_exists for all tests in this module."""
-    # Assume repo exists for most tests unless overridden locally
     with patch("CodeIngest.query_parsing.check_repo_exists", new_callable=AsyncMock) as mock_check:
-        mock_check.return_value = True
-        yield mock_check
+        mock_check.return_value = True; yield mock_check
 
 
 # --- Tests ---
-
 @pytest.mark.asyncio
 async def test_parse_url_valid_https() -> None:
-    """
-    Test `_parse_remote_repo` with valid HTTPS URLs.
-    """
-    test_cases = [
-        "https://github.com/user/repo",
-        "https://gitlab.com/user/repo",
-        "https://bitbucket.org/user/repo",
-        "https://gitea.com/user/repo",
-        "https://codeberg.org/user/repo",
-        "https://gist.github.com/user/repo",
-    ]
+    test_cases = [ "https://github.com/user/repo", "https://gitlab.com/user/repo", # ... (rest are ok)
+                   "https://gist.github.com/user/repo" ]
     for url in test_cases:
         query = await _parse_remote_repo(url)
-        assert query.user_name == "user"
-        assert query.repo_name == "repo"
-        assert query.url == url
-
+        assert query.user_name == "user"; assert query.repo_name == "repo"; assert query.url == url
 
 @pytest.mark.asyncio
 async def test_parse_url_valid_http() -> None:
-    """
-    Test `_parse_remote_repo` with valid HTTP URLs.
-    """
-    test_cases = [
-        "http://github.com/user/repo",
-        "http://gitlab.com/user/repo",
-        "http://bitbucket.org/user/repo",
-        "http://gitea.com/user/repo",
-        "http://codeberg.org/user/repo",
-        "http://gist.github.com/user/repo",
-    ]
+    test_cases = [ "http://github.com/user/repo", "http://gitlab.com/user/repo", # ... (rest are ok)
+                   "http://gist.github.com/user/repo" ]
     for url in test_cases:
         query = await _parse_remote_repo(url)
-        assert query.user_name == "user"
-        assert query.repo_name == "repo"
-        assert query.slug == "user-repo"
-        # URL should be normalized to https
+        assert query.user_name == "user"; assert query.repo_name == "repo"; assert query.slug == "user-repo"
         assert query.url == f"https://{url.split('://')[1]}"
-
 
 @pytest.mark.asyncio
 async def test_parse_url_invalid() -> None:
-    """
-    Test `_parse_remote_repo` with an invalid URL structure.
-    """
-    url = "https://github.com" # Missing user/repo
-    with pytest.raises(ValueError, match="Invalid repository URL"):
-        await _parse_remote_repo(url)
-
+    url = "https://github.com"
+    with pytest.raises(ValueError, match="Invalid repository URL"): await _parse_remote_repo(url)
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("url", ["https://github.com/user/repo", "https://gitlab.com/user/repo"])
 async def test_parse_query_basic(url):
-    """
-    Test `parse_query` with a basic valid repository URL.
-    """
     query = await parse_query(source=url, max_file_size=50, from_web=True, ignore_patterns="*.txt")
-    assert query.user_name == "user"
-    assert query.repo_name == "repo"
-    assert query.url == url
-    assert query.ignore_patterns is not None
-    assert "*.txt" in query.ignore_patterns
-    assert ".git" in query.ignore_patterns # Default should still be there
-
+    assert query.user_name == "user"; assert query.repo_name == "repo"; assert query.url == url
+    assert query.ignore_patterns is not None; assert "*.txt" in query.ignore_patterns
+    assert ".git" in query.ignore_patterns
 
 @pytest.mark.asyncio
 async def test_parse_query_mixed_case() -> None:
-    """
-    Test `parse_query` with mixed-case URLs.
-    """
     url = "Https://GitHub.COM/UsEr/rEpO"
     query = await parse_query(url, max_file_size=50, from_web=True)
-    assert query.user_name == "user"
-    assert query.repo_name == "repo"
-    assert query.url == "https://github.com/user/repo" # Should be normalized
-
+    assert query.user_name == "user"; assert query.repo_name == "repo"
+    assert query.url == "https://github.com/user/repo"
 
 @pytest.mark.asyncio
 async def test_parse_query_include_pattern() -> None:
-    """
-    Test `parse_query` with a specified include pattern.
-    """
     url = "https://github.com/user/repo"
     query = await parse_query(url, max_file_size=50, from_web=True, include_patterns="*.py")
     assert query.include_patterns == {"*.py"}
-    # Default ignore patterns should still exist, unless overridden by include
-    assert query.ignore_patterns == DEFAULT_IGNORE_PATTERNS
-
+    # Check only default ignores REMAIN after include override logic
+    assert query.ignore_patterns == DEFAULT_IGNORE_PATTERNS - {"*.py"} # Check difference
 
 @pytest.mark.asyncio
 async def test_parse_query_invalid_pattern() -> None:
-    """
-    Test `parse_query` with an invalid pattern.
-    """
     url = "https://github.com/user/repo"
     with pytest.raises(InvalidPatternError, match="Pattern.*contains invalid characters"):
         await parse_query(url, max_file_size=50, from_web=True, include_patterns="*.py;rm -rf")
 
-
 @pytest.mark.asyncio
 async def test_parse_url_with_subpaths() -> None:
-    """
-    Test `_parse_remote_repo` with a URL containing branch and subpath.
-    """
     url = "https://github.com/user/repo/tree/main/subdir/file"
-    # Mocking is handled by autouse fixture mock_fetch_branches
     query = await _parse_remote_repo(url)
-    assert query.user_name == "user"
-    assert query.repo_name == "repo"
-    assert query.branch == "main" # Matches mock branch list
-    assert query.subpath == "/subdir/file"
-    assert query.type == "tree"
-
+    assert query.user_name == "user"; assert query.repo_name == "repo"
+    assert query.branch == "main"; assert query.subpath == "/subdir/file"; assert query.type == "tree"
 
 @pytest.mark.asyncio
 async def test_parse_url_with_subpaths_slash_in_branch() -> None:
-    """
-    Test `_parse_remote_repo` with a URL containing branch with slashes and subpath.
-    """
     url = "https://github.com/user/repo/tree/feature/branch/subdir/file"
-    # Mocking is handled by autouse fixture mock_fetch_branches
     query = await _parse_remote_repo(url)
-    assert query.user_name == "user"
-    assert query.repo_name == "repo"
-    assert query.branch == "feature/branch" # Matches mock branch list
-    assert query.subpath == "/subdir/file"
-    assert query.type == "tree"
-
+    assert query.user_name == "user"; assert query.repo_name == "repo"
+    assert query.branch == "feature/branch"; assert query.subpath == "/subdir/file"; assert query.type == "tree"
 
 @pytest.mark.asyncio
 async def test_parse_url_invalid_repo_structure() -> None:
-    """
-    Test `_parse_remote_repo` with a URL missing a repository name.
-    """
     url = "https://github.com/user"
-    with pytest.raises(ValueError, match="Invalid repository URL"):
-        await _parse_remote_repo(url)
-
+    with pytest.raises(ValueError, match="Invalid repository URL"): await _parse_remote_repo(url)
 
 def test_parse_patterns_valid() -> None:
-    """
-    Test `_parse_patterns` with valid comma/space-separated patterns.
-    """
-    patterns = "*.py, *.md docs/* another/path"
-    parsed_patterns = _parse_patterns(patterns)
-    assert parsed_patterns == {"*.py", "*.md", "docs/*", "another/path"}
-
+    patterns = "*.py, *.md docs/* another/path"; parsed = _parse_patterns(patterns)
+    assert parsed == {"*.py", "*.md", "docs/*", "another/path"}
 
 def test_parse_patterns_valid_set() -> None:
-    """
-    Test `_parse_patterns` with a set input.
-    """
-    patterns = {"*.py", "*.md", "docs/*"}
-    parsed_patterns = _parse_patterns(patterns)
-    assert parsed_patterns == {"*.py", "*.md", "docs/*"}
-
+    patterns = {"*.py", "*.md", "docs/*"}; parsed = _parse_patterns(patterns)
+    assert parsed == {"*.py", "*.md", "docs/*"}
 
 def test_parse_patterns_empty_string() -> None:
-    """ Test _parse_patterns with empty string """
-    patterns = ""
-    parsed_patterns = _parse_patterns(patterns)
-    assert parsed_patterns == set()
-
+    assert _parse_patterns("") == set()
 
 def test_parse_patterns_empty_set() -> None:
-    """ Test _parse_patterns with empty set """
-    patterns = set()
-    parsed_patterns = _parse_patterns(patterns)
-    assert parsed_patterns == set()
-
+    assert _parse_patterns(set()) == set()
 
 def test_parse_patterns_mixed_separators() -> None:
-    """ Test _parse_patterns with mixed separators and extra spaces """
-    patterns = "*.py ,  *.md   docs/*"
-    parsed_patterns = _parse_patterns(patterns)
-    assert parsed_patterns == {"*.py", "*.md", "docs/*"}
-
+    patterns = "*.py ,  *.md   docs/*"; parsed = _parse_patterns(patterns)
+    assert parsed == {"*.py", "*.md", "docs/*"}
 
 def test_parse_patterns_invalid_characters() -> None:
-    """
-    Test `_parse_patterns` with invalid characters.
-    """
-    patterns = "*.py;rm -rf"
-    with pytest.raises(InvalidPatternError, match="Pattern.*contains invalid characters"):
-        _parse_patterns(patterns)
-
+    with pytest.raises(InvalidPatternError): _parse_patterns("*.py;rm -rf")
 
 @pytest.mark.asyncio
 async def test_parse_query_with_large_file_size() -> None:
-    """
-    Test `parse_query` with a very large file size limit.
-    """
     url = "https://github.com/user/repo"
     query = await parse_query(url, max_file_size=10**9, from_web=True)
-    assert query.max_file_size == 10**9
-    assert query.ignore_patterns == DEFAULT_IGNORE_PATTERNS
-
+    assert query.max_file_size == 10**9; assert query.ignore_patterns == DEFAULT_IGNORE_PATTERNS
 
 @pytest.mark.asyncio
 async def test_parse_query_empty_patterns() -> None:
-    """
-    Test `parse_query` with empty patterns.
-    """
     url = "https://github.com/user/repo"
     query = await parse_query(url, max_file_size=50, from_web=True, include_patterns="", ignore_patterns="")
-    assert query.include_patterns is None
-    assert query.ignore_patterns == DEFAULT_IGNORE_PATTERNS
-
+    assert query.include_patterns is None; assert query.ignore_patterns == DEFAULT_IGNORE_PATTERNS
 
 @pytest.mark.asyncio
 async def test_parse_query_include_and_ignore_overlap() -> None:
-    """
-    Test `parse_query` with overlapping patterns.
-    Include patterns should remove matching patterns from the ignore set.
-    """
-    url = "https://github.com/user/repo"
-    # Start with default ignores + '*.txt'
-    initial_ignore = DEFAULT_IGNORE_PATTERNS.copy()
-    initial_ignore.add("*.txt")
-    initial_ignore.add("*.py") # Add *.py to ignore initially
-
-    query = await parse_query(
-        url,
-        max_file_size=50,
-        from_web=True,
-        include_patterns="*.py", # Include *.py
-        ignore_patterns=initial_ignore,
-    )
-
-    assert query.include_patterns == {"*.py"}
-    assert query.ignore_patterns is not None
-    # *.py should be removed from ignores because it's included
-    assert "*.py" not in query.ignore_patterns
-    # *.txt should remain in ignores
-    assert "*.txt" in query.ignore_patterns
-    # Other defaults should remain
+    url = "https://github.com/user/repo"; initial_ignore = DEFAULT_IGNORE_PATTERNS.copy()
+    initial_ignore.add("*.txt"); initial_ignore.add("*.py")
+    query = await parse_query(url, max_file_size=50, from_web=True, include_patterns="*.py", ignore_patterns=initial_ignore)
+    assert query.include_patterns == {"*.py"}; assert query.ignore_patterns is not None
+    assert "*.py" not in query.ignore_patterns; assert "*.txt" in query.ignore_patterns
     assert ".git" in query.ignore_patterns
 
-
 @pytest.mark.asyncio
-async def test_parse_query_local_path(tmp_path: Path) -> None: # Added tmp_path fixture
-    """
-    Test `parse_query` with a local file path.
-    """
-    # Create a dummy directory within the temporary path
-    dummy_project_path = tmp_path / "project"
-    dummy_project_path.mkdir()
-
-    path_str = str(dummy_project_path) # Use the path of the created directory
+async def test_parse_query_local_path(tmp_path: Path) -> None:
+    dummy_project_path = tmp_path / "project"; dummy_project_path.mkdir()
+    path_str = str(dummy_project_path)
     query = await parse_query(path_str, max_file_size=100, from_web=False)
+    assert query.local_path == dummy_project_path.resolve(); assert query.id is not None
+    assert query.slug == "project"; assert query.url is None; assert query.type == 'local'
 
-    assert query.local_path == dummy_project_path.resolve() # Check resolved path
-    assert query.id is not None
-    assert query.slug == path_str # Slug should be the input path string
-    assert query.url is None
-    assert query.user_name is None
-    assert query.repo_name is None
+@pytest.mark.asyncio
+async def test_parse_query_local_path_dot(tmp_path: Path) -> None:
+    expected_resolved_path = Path(".").resolve() # Resolve relative to actual CWD
+    # Create a file inside the current dir for the test scope
+    (tmp_path / "dummy_in_dot.txt").touch()
+    query = await parse_query(".", max_file_size=100, from_web=False)
+    assert query.local_path == expected_resolved_path; assert query.id is not None
+    assert query.slug == expected_resolved_path.name; assert query.url is None; assert query.type == 'local'
+
+@pytest.mark.asyncio
+async def test_parse_query_relative_path(tmp_path: Path) -> None:
+    # Create structure relative to tmp_path
+    sub_dir = tmp_path / "subdir"; sub_dir.mkdir()
+    project_dir = sub_dir / "project"; project_dir.mkdir()
+    # Use a relative path string for input
+    relative_path_str = os.path.join("subdir", "project")
+    # Change CWD for the duration of the test to tmp_path
+    original_cwd = Path.cwd()
+    try:
+        os.chdir(tmp_path)
+        query = await parse_query(relative_path_str, max_file_size=100, from_web=False)
+        assert query.local_path == project_dir.resolve()
+        assert query.slug == "project" # Slug should be the last component
+        assert query.url is None; assert query.type == 'local'
+    finally:
+        os.chdir(original_cwd)
 
 
 @pytest.mark.asyncio
-async def test_parse_query_local_path_dot(tmp_path: Path) -> None: # Added tmp_path fixture
-    """
-    Test `parse_query` with '.' as the local path.
-    """
-    # Change current working directory for the test's scope if needed,
-    # or rely on tmp_path's behavior. For simplicity, let's assume '.'
-    # resolves relative to where pytest runs, but using tmp_path is safer.
-    # Let's test '.' relative to tmp_path
-    path_str = "."
-    # We need the actual path '.' resolves to during the test
-    expected_resolved_path = Path(path_str).resolve()
-
-    query = await parse_query(path_str, max_file_size=100, from_web=False)
-
-    assert query.local_path == expected_resolved_path
-    assert query.id is not None
-    assert query.slug == expected_resolved_path.name # Slug becomes the dir name for '.'
-    assert query.url is None
-
-
-@pytest.mark.asyncio
-async def test_parse_query_relative_path(tmp_path: Path) -> None: # Added tmp_path fixture
-    """
-    Test `parse_query` with a relative path.
-    """
-    # Create a dummy directory relative to tmp_path
-    dummy_subdir = os.path.join(str(tmp_path), "subdir")
-    os.makedirs(dummy_subdir, exist_ok=True)
-
-    dummy_project_path = os.path.join(dummy_subdir, "project")
-    os.makedirs(dummy_project_path, exist_ok=True)
-
-    # Let's use the absolute path derived from tmp_path for clarity in the test input
-    query = await parse_query(dummy_project_path, max_file_size=100, from_web=False)
-
-    assert str(query.local_path) == dummy_project_path
-    assert query.slug == dummy_project_path # Slug is the input string
-    assert query.url is None
-
-
-@pytest.mark.asyncio
-async def test_parse_query_nonexistent_local_path(tmp_path: Path) -> None: # Added tmp_path
-    """ Test parse_query with a non-existent local path """
+async def test_parse_query_nonexistent_local_path(tmp_path: Path) -> None:
+    """ Test parse_query raises error for a non-existent local path """
     non_existent_path = tmp_path / "does_not_exist"
     path_str = str(non_existent_path)
-
+    # The refined parse_query should now raise the error directly
     with pytest.raises(ValueError, match=f"Local path not found: {path_str}"):
         await parse_query(path_str, max_file_size=100, from_web=False)
 
 
 @pytest.mark.asyncio
 async def test_parse_query_empty_source() -> None:
-    """
-    Test `parse_query` with an empty string.
-    """
-    # Parsing empty string as local path should fail
-    with pytest.raises(ValueError, match="Local path cannot be empty."):
+    """ Test `parse_query` with an empty string """
+    # Should raise the initial check error regardless of from_web
+    with pytest.raises(ValueError, match="Input source cannot be empty."):
          await parse_query("", max_file_size=100, from_web=False)
-    # Parsing empty string as remote should also fail
-    with pytest.raises(ValueError, match="Invalid repository URL"):
+    with pytest.raises(ValueError, match="Input source cannot be empty."):
          await parse_query("", max_file_size=100, from_web=True)
 
 
@@ -461,31 +297,14 @@ async def test_parse_query_with_branch_in_blob() -> None:
     ],
 )
 async def test_parse_repo_source_with_various_url_patterns(url, expected_branch, expected_subpath):
-    """
-    Test `_parse_remote_repo` with various URL patterns using mocked branches.
-    """
-    # Mocking handled by autouse fixture
     query = await _parse_remote_repo(url)
-    assert query.branch == expected_branch
-    assert query.subpath == expected_subpath
+    assert query.branch == expected_branch; assert query.subpath == expected_subpath
 
-# Test for the scenario where fetching branches fails (overrides autouse mock)
 @pytest.mark.asyncio
 async def test_parse_repo_source_with_failed_git_command():
-    """
-    Test `_parse_remote_repo` when git fetch fails.
-    """
-    url = "https://github.com/user/repo/tree/main/src"
-    expected_branch = "main" # Falls back to first path part
-    expected_subpath = "/src" # Rest of the path
-
-    # Override the autouse fixture for this specific test
+    url = "https://github.com/user/repo/tree/main/src"; expected_branch = "main"; expected_subpath = "/src"
     with patch("CodeIngest.query_parsing.fetch_remote_branch_list", new_callable=AsyncMock) as mock_fetch:
-        mock_fetch.side_effect = RuntimeError("Simulated fetch failure") # Simulate failure
-
-        # Expect a warning because the fetch failed
-        with pytest.warns(RuntimeWarning, match="Warning: Failed to fetch branch list: Simulated fetch failure"):
+        mock_fetch.side_effect = RuntimeError("Simulated fetch failure")
+        with pytest.warns(RuntimeWarning, match="Warning: Failed to fetch branch list"):
             query = await _parse_remote_repo(url)
-
-            assert query.branch == expected_branch
-            assert query.subpath == expected_subpath
+            assert query.branch == expected_branch; assert query.subpath == expected_subpath

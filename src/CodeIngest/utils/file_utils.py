@@ -3,7 +3,7 @@
 import locale
 import platform
 from pathlib import Path
-from typing import List
+from typing import List, Iterator # Import Iterator
 
 try:
     locale.setlocale(locale.LC_ALL, "")
@@ -21,10 +21,18 @@ def get_preferred_encodings() -> List[str]:
         List of encoding names to try in priority order, starting with the
         platform's default encoding followed by common fallback encodings.
     """
-    encodings = [locale.getpreferredencoding(), "utf-8", "utf-16", "utf-16le", "utf-8-sig", "latin"]
+    # Added more common encodings for better compatibility
+    encodings = [locale.getpreferredencoding(), "utf-8", "utf-16", "utf-16le", "utf-8-sig", "latin-1", "ascii"]
     if platform.system() == "Windows":
         encodings += ["cp1252", "iso-8859-1"]
-    return encodings
+    # Remove duplicates while preserving order as much as possible
+    seen = set()
+    ordered_encodings = []
+    for enc in encodings:
+        if enc not in seen:
+            ordered_encodings.append(enc)
+            seen.add(enc)
+    return ordered_encodings
 
 
 def is_text_file(path: Path) -> bool:
@@ -48,27 +56,38 @@ def is_text_file(path: Path) -> bool:
         with path.open("rb") as f:
             chunk = f.read(1024)
     except OSError:
-        return False
+        return False # Cannot read the file, assume not text
 
     # If file is empty, treat as text
     if not chunk:
         return True
 
     # Check obvious binary bytes
-    if b"\x00" in chunk or b"\xff" in chunk:
+    # Added more common binary indicators
+    binary_indicators = {b"\x00", b"\xff", b"\xfe\xff", b"\xff\xfe"}
+    if any(indicator in chunk for indicator in binary_indicators):
         return False
 
-    # Attempt multiple encodings
+    # Attempt multiple encodings on the chunk to see if it can be decoded
+    # This is a heuristic, not foolproof
     for enc in get_preferred_encodings():
         try:
-            with path.open(encoding=enc) as f:
-                f.read()
-                return True
+            chunk.decode(enc)
+            return True # Successfully decoded a chunk, likely text
         except UnicodeDecodeError:
             continue
         except UnicodeError:
             continue
-        except OSError:
-            return False
+        except Exception:
+            # Catch any other potential decoding errors
+            continue
 
-    return False
+
+    return False # Could not decode the chunk with any preferred encoding
+
+
+# This function is no longer needed here as read_chunks is in FileSystemNode
+# def read_file_in_chunks(file_path: Path, chunk_size: int = 8192) -> Iterator[str]:
+#     """Reads a file line by line or in chunks."""
+#     # ... (implementation moved to FileSystemNode)
+#     pass
