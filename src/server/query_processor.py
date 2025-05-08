@@ -10,6 +10,8 @@ from typing import Optional, List, Dict, Any # Added List, Dict, Any
 from fastapi import Request, UploadFile
 from starlette.templating import _TemplateResponse
 from urllib.parse import quote
+import zipfile # Ensure zipfile is imported if used in zip handling
+import shutil # Ensure shutil is imported if used in zip handling
 
 # --- Core CodeIngest imports ---
 from CodeIngest.entrypoint import ingest_async
@@ -51,76 +53,54 @@ async def process_query(
     Process a query (from URL/path or ZIP), generate summary, save digest, and prepare response.
     Includes dynamic download filename based on project and branch/tag.
     """
-    # (Input validation remains the same)
+    # (Input validation and source determination remains the same)
     source_for_ingest: Optional[str] = None
     effective_input_display = "" # Initialize
+
     if source_type == "url_path":
         if not input_text:
-            # Handle error
             return templates.TemplateResponse("index.jinja" if is_index else "git.jinja", {"request": request, "error_message": "Please provide a URL or local path.", "repo_url": input_text, "examples": EXAMPLE_REPOS if is_index else [], "default_file_size": slider_position, "pattern_type": pattern_type, "pattern": pattern, "branch_or_tag": branch_or_tag}, status_code=400)
         source_for_ingest = input_text
         effective_input_display = input_text
     elif source_type == "zip_file":
         if not zip_file or not zip_file.filename:
-            # Handle error
-            return templates.TemplateResponse("index.jinja" if is_index else "git.jinja", {"request": request, "error_message": "Please upload a ZIP file.", "repo_url": input_text, "examples": EXAMPLE_REPOS if is_index else [], "default_file_size": slider_position, "pattern_type": pattern_type, "pattern": pattern, "branch_or_tag": branch_or_tag}, status_code=400)
+             return templates.TemplateResponse("index.jinja" if is_index else "git.jinja", {"request": request, "error_message": "Please upload a ZIP file.", "repo_url": input_text, "examples": EXAMPLE_REPOS if is_index else [], "default_file_size": slider_position, "pattern_type": pattern_type, "pattern": pattern, "branch_or_tag": branch_or_tag}, status_code=400)
         # Placeholder logic for zip
         source_for_ingest = zip_file.filename # Replace with actual extraction path
         effective_input_display = f"ZIP: {zip_file.filename}"
-        branch_or_tag = "" # Clear branch/tag for zip uploads
+        branch_or_tag = ""
     else:
-         # Handle error
          return templates.TemplateResponse("index.jinja" if is_index else "git.jinja", {"request": request, "error_message": "Invalid source type specified.", "repo_url": input_text, "examples": EXAMPLE_REPOS if is_index else [], "default_file_size": slider_position, "pattern_type": pattern_type, "pattern": pattern, "branch_or_tag": branch_or_tag}, status_code=400)
 
 
-    if pattern_type == "include":
-        include_patterns = pattern
-        exclude_patterns = None
-    elif pattern_type == "exclude":
-        exclude_patterns = pattern
-        include_patterns = None
-    else:
-        raise ValueError(f"Invalid pattern type: {pattern_type}")
+    if pattern_type == "include": include_patterns = pattern; exclude_patterns = None
+    elif pattern_type == "exclude": exclude_patterns = pattern; include_patterns = None
+    else: raise ValueError(f"Invalid pattern type: {pattern_type}")
 
     template = "index.jinja" if is_index else "git.jinja"
     template_response = partial(templates.TemplateResponse, name=template)
     max_file_size = log_slider_to_size(slider_position)
 
-    context = {
-        "request": request,
-        "repo_url": input_text or "",
+    context = { # (Context initialization remains the same) ...
+        "request": request, "repo_url": input_text or "",
         "examples": EXAMPLE_REPOS if is_index else [],
-        "default_file_size": slider_position,
-        "pattern_type": pattern_type,
-        "pattern": pattern,
-        "branch_or_tag": branch_or_tag,
-        "result": False,
-        "error_message": None,
-        "summary": None,
-        "tree_data": None, # MODIFIED: Changed tree to tree_data
-        "content": None,
-        "ingest_id": None,
-        "is_local_path": False,
-        "encoded_download_filename": None,
-        "base_repo_url": None, # Added for links
-        "repo_ref": None,      # Added for links (branch/commit)
+        "default_file_size": slider_position, "pattern_type": pattern_type,
+        "pattern": pattern, "branch_or_tag": branch_or_tag, "result": False,
+        "error_message": None, "summary": None, "tree_data": None, "content": None,
+        "ingest_id": None, "is_local_path": False, "encoded_download_filename": None,
+        "base_repo_url": None, "repo_ref": None,
     }
-
     query_obj_from_ingest = None
 
     try:
-        # --- Call the core ingest function ---
-        # MODIFIED: Unpack tree_data (List) instead of tree (str)
+        # Call ingest_async
         summary, tree_data, content, query_obj_from_ingest = await ingest_async(
-            source=source_for_ingest,
-            max_file_size=max_file_size,
-            include_patterns=include_patterns,
-            exclude_patterns=exclude_patterns,
+            source=source_for_ingest, max_file_size=max_file_size,
+            include_patterns=include_patterns, exclude_patterns=exclude_patterns,
             branch=branch_or_tag if source_type == 'url_path' and branch_or_tag else None,
             output=None
         )
 
-        # --- Create Temp Dir and Save Digest ---
         if not query_obj_from_ingest or not query_obj_from_ingest.id:
             _print_error(effective_input_display, Exception("Ingestion succeeded but query ID was not returned."), max_file_size, pattern_type, pattern, branch_or_tag)
             context["error_message"] = "An unexpected error occurred: Ingestion ID missing."
@@ -136,66 +116,34 @@ async def process_query(
             # Save structured data or simplified text to digest?
             # For simplicity, save simplified text version to digest.txt
             with open(digest_path, "w", encoding="utf-8") as f:
-                 # Recreate simple text tree for file output
-                 text_tree_for_file = "Directory structure:\n"
+                 f.write("Directory structure:\n")
                  for item in tree_data:
-                     indent = "    " * item['depth']
-                     prefix = "└── " # Simplified prefix
-                     text_tree_for_file += f"{indent}{prefix}{item['name']}\n"
-                 f.write(text_tree_for_file)
-                 f.write("\n" + content)
+                     # Use the pre-calculated prefix directly
+                     f.write(f"{item['prefix']}{item['name']}\n")
+                 f.write("\n" + content) # Append the actual file content
 
         except OSError as e:
             print(f"Error writing digest file {digest_path}: {e}")
             ingest_id_for_download = None
             context["error_message"] = f"Error saving digest: {e}"
 
-
-        # --- Determine Download Filename ---
-        # (Logic remains the same)
-        filename_parts = []
-        project_name_part = query_obj_from_ingest.repo_name if query_obj_from_ingest.url else query_obj_from_ingest.slug
-        sanitized_project_name = sanitize_filename_part(project_name_part)
-        if sanitized_project_name: filename_parts.append(sanitized_project_name)
-        else: filename_parts.append("digest")
+        # (Determine Download Filename logic remains the same)
+        filename_parts = []; project_name_part = query_obj_from_ingest.repo_name if query_obj_from_ingest.url else query_obj_from_ingest.slug
+        sanitized_project_name = sanitize_filename_part(project_name_part); filename_parts.append(sanitized_project_name or "digest")
         ref_for_filename = branch_or_tag if branch_or_tag else query_obj_from_ingest.branch
         if source_type != 'zip_file' and query_obj_from_ingest.url and ref_for_filename:
-            sanitized_ref = sanitize_filename_part(ref_for_filename)
+            sanitized_ref = sanitize_filename_part(ref_for_filename);
             if sanitized_ref: filename_parts.append(sanitized_ref)
         elif source_type != 'zip_file' and query_obj_from_ingest.url and query_obj_from_ingest.commit and not branch_or_tag:
-            sanitized_commit = sanitize_filename_part(query_obj_from_ingest.commit[:7])
+            sanitized_commit = sanitize_filename_part(query_obj_from_ingest.commit[:7]);
             if sanitized_commit: filename_parts.append(sanitized_commit)
-        download_filename = "_".join(filename_parts) + ".txt"
-        encoded_download_filename = quote(download_filename)
+        download_filename = "_".join(filename_parts) + ".txt"; encoded_download_filename = quote(download_filename)
 
-
-        # --- Update context for success ---
+        # (Update context for success remains the same)
         display_path = query_obj_from_ingest.url if query_obj_from_ingest.url else str(query_obj_from_ingest.local_path)
-        if len(content) > MAX_DISPLAY_SIZE:
-            content_to_display = (f"(Files content cropped...)\n" + content[:MAX_DISPLAY_SIZE])
-        else:
-            content_to_display = content
-
-        _print_success(
-            url_or_path=effective_input_display,
-            max_file_size=max_file_size, pattern_type=pattern_type, pattern=pattern,
-            summary=summary, branch_or_tag=branch_or_tag
-        )
-
-        context.update(
-            {
-                "result": True,
-                "summary": summary,
-                "tree_data": tree_data, # MODIFIED: Pass structured tree data
-                "content": content_to_display,
-                "ingest_id": ingest_id_for_download,
-                "is_local_path": not query_obj_from_ingest.url and source_type != 'zip_file',
-                "encoded_download_filename": encoded_download_filename if ingest_id_for_download else None,
-                # ADDED: Pass info needed for links
-                "base_repo_url": query_obj_from_ingest.url if query_obj_from_ingest.url else None,
-                "repo_ref": query_obj_from_ingest.branch or query_obj_from_ingest.commit or 'main',
-            }
-        )
+        content_to_display = content[:MAX_DISPLAY_SIZE] + ("\n(Files content cropped...)" if len(content) > MAX_DISPLAY_SIZE else "")
+        _print_success(url_or_path=effective_input_display, max_file_size=max_file_size, pattern_type=pattern_type, pattern=pattern, summary=summary, branch_or_tag=branch_or_tag)
+        context.update({ "result": True, "summary": summary, "tree_data": tree_data, "content": content_to_display, "ingest_id": ingest_id_for_download, "is_local_path": not query_obj_from_ingest.url and source_type != 'zip_file', "encoded_download_filename": encoded_download_filename if ingest_id_for_download else None, "base_repo_url": query_obj_from_ingest.url if query_obj_from_ingest.url else None, "repo_ref": query_obj_from_ingest.branch or query_obj_from_ingest.commit or 'main', })
         return template_response(context=context)
 
     except Exception as exc:

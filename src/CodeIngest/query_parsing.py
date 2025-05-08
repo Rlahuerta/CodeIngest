@@ -169,35 +169,40 @@ async def _parse_remote_repo(source: str) -> IngestionQuery:
         if not parsed_url.netloc: raise ValueError(f"Invalid URL: Missing host in {source}")
         host = parsed_url.netloc.lower()
         _validate_host(host)
-        path_part_for_user_repo = parsed_url.path # Assign path here
+        path_part_for_user_repo = parsed_url.path
     else:
         parts = source.split('/', 1)
-        if "." in parts[0]: # github.com/user/repo
+        if "." in parts[0]:
             host = parts[0].lower()
             _validate_host(host)
             path_part_for_user_repo = parts[1] if len(parts) > 1 else ""
-            source_with_scheme = "https://" + source # Add scheme for consistency
-        else: # user/repo slug
+            source_with_scheme = "https://" + source
+        else:
             user_name_guess, repo_name_guess = _get_user_and_repo_from_path(source)
             host = await try_domains_for_user_and_repo(user_name_guess, repo_name_guess)
-            path_part_for_user_repo = source # The original source is the path
-            source_with_scheme = f"https://{host}/{source}" # Add scheme and host
+            path_part_for_user_repo = source
+            source_with_scheme = f"https://{host}/{source}"
 
-        parsed_url = urlparse(source_with_scheme) # Reparse if needed
-        # Ensure path part is taken from the potentially updated parsed_url
+        parsed_url = urlparse(source_with_scheme)
         path_part_for_user_repo = parsed_url.path
 
 
     # Extract user/repo from the path part identified
     user_name, repo_name = _get_user_and_repo_from_path(path_part_for_user_repo)
 
+    # --- FIX: Remove .git suffix from repo_name if present ---
+    if repo_name.endswith(".git"):
+        repo_name = repo_name[:-4]
+    # --- END FIX ---
+
     _id = str(uuid.uuid4())
-    slug = f"{user_name}-{repo_name}"
+    slug = f"{user_name}-{repo_name}" # Use cleaned repo_name
     local_path = TMP_BASE_PATH / _id / slug
-    url = f"https://{host}/{user_name}/{repo_name}"
+    # Construct the final canonical URL using cleaned repo_name
+    url = f"https://{host}/{user_name}/{repo_name}" # Use cleaned repo_name
 
     parsed = IngestionQuery(
-        user_name=user_name, repo_name=repo_name, url=url,
+        user_name=user_name, repo_name=repo_name, url=url, # Use cleaned names/url
         local_path=local_path, slug=slug, id=_id, subpath="/",
         type=None, branch=None, commit=None, ignore_patterns=None,
         include_patterns=None, original_zip_path=None, temp_extract_path=None
@@ -205,6 +210,10 @@ async def _parse_remote_repo(source: str) -> IngestionQuery:
 
     # (Rest of _parse_remote_repo remains the same...)
     remaining_parts = path_part_for_user_repo.strip("/").split("/")[2:]
+    # Remove .git from remaining parts if it exists
+    if remaining_parts and remaining_parts[-1].lower() == ".git":
+        remaining_parts.pop()
+
     if not remaining_parts: return parsed
     possible_type = remaining_parts.pop(0)
     if possible_type in ("issues", "pull"): return parsed
