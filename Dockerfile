@@ -16,7 +16,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update \
     && apt-get install -q -y --no-install-recommends --fix-missing -o Acquire::http::Pipeline-Depth=0 \
     wget curl ca-certificates git xvfb locales locales-all apt-utils nano build-essential \
-    software-properties-common subversion pkg-config httpie gcc
+    software-properties-common subversion pkg-config httpie gcc zip
 
 # Basic Python Packages
 RUN apt-get install -q -y --no-install-recommends --fix-missing -o Acquire::http::Pipeline-Depth=0 \
@@ -64,8 +64,7 @@ RUN chown -R appuser:appuser $PYSETUP_PATH
 
 # Switch to non-root user
 USER appuser
-EXPOSE 8000
+EXPOSE 8800/tcp
 
-#SHELL ["/bin/bash", "-c"]
-#CMD ["python", "-m", "uvicorn", "server.main:app", "--host", "0.0.0.0", "--port", "8000"]
-CMD ["poetry", "run", "uvicorn", "src.server.main:app", "--host", "0.0.0.0", "--port", "8000"]
+#CMD ["poetry", "run", "uvicorn", "src.server.main:app", "--host", "127.0.0.1", "--port", "8800"]
+CMD ["poetry", "run", "uvicorn", "src.server.main:app", "--host", "0.0.0.0", "--port", "8800"]

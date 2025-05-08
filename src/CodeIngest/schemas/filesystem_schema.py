@@ -1,20 +1,18 @@
+# src/CodeIngest/schemas/filesystem_schema.py
 """Define the schema for the filesystem representation."""
 
 from __future__ import annotations
 
 import os
-import warnings
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from pathlib import Path
-from typing import Iterator
+import warnings # Import warnings
 
-# Import necessary utils carefully to avoid circular imports if moved
 from CodeIngest.utils.file_utils import get_preferred_encodings, is_text_file
 from CodeIngest.utils.notebook_utils import process_notebook
 
-SEPARATOR = "=" * 48
-DEFAULT_CHUNK_SIZE = 8192
+SEPARATOR = "=" * 48  # Tiktoken, the tokenizer openai uses, counts 2 tokens if we have more than 48
 
 
 class FileSystemNodeType(Enum):
@@ -32,15 +30,18 @@ class FileSystemStats:
     visited: set[Path] = field(default_factory=set)
     total_files: int = 0
     total_size: int = 0
+    # --- ADDED Missing Flags ---
+    depth_limit_reached: bool = False
+    total_file_limit_reached: bool = False
+    total_size_limit_reached: bool = False
 
 
 @dataclass
-class FileSystemNode:
+class FileSystemNode:  # pylint: disable=too-many-instance-attributes
     """
     Class representing a node in the file system (either a file or directory).
 
     Tracks properties of files/directories for comprehensive analysis.
-    Does NOT store file content directly for large files.
     """
 
     name: str
@@ -52,103 +53,170 @@ class FileSystemNode:
     dir_count: int = 0
     depth: int = 0
     children: list[FileSystemNode] = field(default_factory=list)
+    _content_cache: str | None = field(default=None, repr=False) # Add cache for content
+
 
     def sort_children(self) -> None:
         """
         Sort the children nodes of a directory according to a specific order.
+
+        Order of sorting:
+          1. README.md (if present)
+          2. Regular files (not starting with dot)
+          3. Hidden files (starting with dot)
+          4. Regular directories (not starting with dot)
+          5. Hidden directories (starting with dot)
+          6. Symlinks (sorted by name after directories)
+
+
+        All groups are sorted alphanumerically within themselves.
+
+        Raises
+        ------
+        ValueError
+            If the node is not a directory.
         """
         if self.type != FileSystemNodeType.DIRECTORY:
             raise ValueError("Cannot sort children of a non-directory node")
 
         def _sort_key(child: FileSystemNode) -> tuple[int, str]:
+            # returns the priority order for the sort function, 0 is first
+            # Groups: 0=README, 1=regular file, 2=hidden file, 3=regular dir, 4=hidden dir, 5=symlink
             name = child.name.lower()
             if child.type == FileSystemNodeType.FILE:
-                if name == "readme.md": return (0, name)
+                if name == "readme.md":
+                    return (0, name)
                 return (1 if not name.startswith(".") else 2, name)
-            return (3 if not name.startswith(".") else 4, name)
+            elif child.type == FileSystemNodeType.DIRECTORY:
+                return (3 if not name.startswith(".") else 4, name)
+            elif child.type == FileSystemNodeType.SYMLINK:
+                 return (5, name) # Sort symlinks last
+            return (6, name) # Should not happen, fallback
 
         self.children.sort(key=_sort_key)
 
-    # Removed content_string property
-
-    def read_chunks(self, chunk_size: int = DEFAULT_CHUNK_SIZE) -> Iterator[str]:
+    # --- RESTORED content property ---
+    @property
+    def content(self) -> str:  # pylint: disable=too-many-return-statements
         """
-        Reads the content of a file in chunks.
+        Read the content of a file if it's text (or a notebook). Return an error message otherwise.
+        Caches the content after the first read.
 
-        Parameters
-        ----------
-        chunk_size : int
-            The size of each chunk to yield in bytes.
-
-        Yields
-        ------
+        Returns
+        -------
         str
-            A chunk of the file content, or an error message string.
+            The content of the file, or an error message if the file could not be read.
 
         Raises
         ------
         ValueError
-            If the node is not a file or symlink.
+            If the node is a directory.
         """
-        # --- FIX: Handle SYMLINK first - return empty iterator ---
+        if self._content_cache is not None:
+            return self._content_cache
+
+        if self.type == FileSystemNodeType.DIRECTORY:
+            raise ValueError("Cannot read content of a directory node")
+
         if self.type == FileSystemNodeType.SYMLINK:
-            return # Yield nothing for symlinks
+            # Symlinks themselves don't have readable content in this context
+            self._content_cache = ""
+            return self._content_cache
 
-        if self.type != FileSystemNodeType.FILE:
-             # Raise error only if not FILE and not SYMLINK
-            raise ValueError("Cannot read chunks of a non-file node")
+        # Add a size check before attempting to read
+        # Avoid reading excessively large files into memory here if they somehow bypassed earlier checks
+        # Use a reasonable upper limit, e.g., 100MB, adjust as needed
+        MAX_READ_SIZE = 100 * 1024 * 1024
+        # Ensure size is checked before attempting stat if size is already known
+        if self.size > MAX_READ_SIZE:
+             warnings.warn(f"File {self.name} ({self.size} bytes) too large to read content directly, skipping.", UserWarning)
+             self._content_cache = "[File content too large to display/process directly]"
+             return self._content_cache
+        # Stat only if size wasn't pre-populated or is zero (might happen for empty files)
+        elif self.size == 0:
+             try:
+                 actual_size = self.path.stat().st_size
+                 if actual_size > MAX_READ_SIZE:
+                     warnings.warn(f"File {self.name} ({actual_size} bytes) too large to read content directly, skipping.", UserWarning)
+                     self._content_cache = "[File content too large to display/process directly]"
+                     return self._content_cache
+             except OSError:
+                 # If stat fails, we probably can't read it anyway
+                 pass # Let the read attempt handle the error
 
-
-        if not self.path.is_file():
-            warnings.warn(f"Path is not a file: {self.path}", UserWarning)
-            yield f"Error: Path is not a file ({self.path_str})"
-            return
 
         if not is_text_file(self.path):
-            yield "[Non-text file]"
-            return
+            self._content_cache = "[Non-text file]"
+            return self._content_cache
 
         if self.path.suffix == ".ipynb":
             try:
-                yield process_notebook(self.path)
-                return
+                self._content_cache = process_notebook(self.path)
+                return self._content_cache
             except Exception as exc:
-                yield f"Error processing notebook: {exc}"
-                return
+                warnings.warn(f"Error processing notebook {self.path}: {exc}", UserWarning) # Added warning
+                self._content_cache = f"Error processing notebook: {exc}"
+                return self._content_cache
 
-        # Try multiple encodings for regular text files
-        last_error = None
+        # Try multiple encodings
         for encoding in get_preferred_encodings():
             try:
-                with self.path.open(mode='r', encoding=encoding, errors='strict') as f:
-                    while True:
-                        try:
-                            chunk = f.read(chunk_size)
-                            if not chunk:
-                                break
-                            yield chunk
-                        except UnicodeDecodeError as ude_read:
-                            warnings.warn(f"UnicodeDecodeError while reading chunk from {self.path} with {encoding}: {ude_read}", UserWarning)
-                            raise UnicodeDecodeError(encoding, b'', 0, 0, 'Error during chunk read') # Re-raise
-
-                # Successfully read the whole file
-                return
+                with self.path.open(encoding=encoding) as f:
+                    self._content_cache = f.read()
+                    return self._content_cache
             except UnicodeDecodeError:
-                # Failed to decode with this encoding, try the next one
-                last_error = "decode" # Mark that decoding failed at least once
+                continue
+            except UnicodeError: # Catch broader Unicode errors
                 continue
             except OSError as exc:
-                 # --- FIX: Yield specific OS error and STOP trying other encodings ---
-                warnings.warn(f"Error opening file {self.path} with {encoding}: {exc}", UserWarning)
-                yield f"Error reading file: {exc}"
-                return
-            except Exception as e:
-                 # Catch other unexpected errors during open/read
-                 warnings.warn(f"Unexpected error reading file {self.path} with {encoding}: {e}", UserWarning)
-                 yield f"Unexpected error reading file: {e}"
-                 return
+                 # Handle cases like permission errors during open
+                 warnings.warn(f"Error opening/reading file {self.path} with encoding {encoding}: {exc}", UserWarning) # Added warning
+                 self._content_cache = f"Error reading file: {exc}"
+                 return self._content_cache
+            except Exception as exc: # Catch any other unexpected errors
+                 warnings.warn(f"Unexpected error reading file {self.path} with encoding {encoding}: {exc}", UserWarning) # Added warning
+                 self._content_cache = f"Unexpected error reading file: {exc}"
+                 return self._content_cache
 
-        # If loop finished without returning (i.e., all encodings failed or resulted in decode errors)
-        if last_error == "decode":
-            yield "Error: Unable to decode file with available encodings"
-        # If no error occurred but loop finished (e.g., empty file after is_text_file check?), yield nothing implicitly
+
+        warnings.warn(f"Failed to decode file {self.path} with available encodings.", UserWarning) # Added warning
+        self._content_cache = "Error: Unable to decode file with available encodings"
+        return self._content_cache
+
+    # --- RESTORED content_string property ---
+    @property
+    def content_string(self) -> str:
+        """
+        Return the content of the node as a string, including path and content.
+
+        Returns
+        -------
+        str
+            A string representation of the node's content.
+        """
+        link_info = ""
+        node_content = "" # Initialize to empty
+
+        if self.type == FileSystemNodeType.SYMLINK:
+            try:
+                link_target = self.path.readlink().as_posix()
+                link_info = f" -> {link_target}"
+            except OSError:
+                link_info = " -> [Broken Link]"
+            # No content for symlinks themselves
+        elif self.type == FileSystemNodeType.FILE:
+             # Access the restored content property to read/get content
+             node_content = self.content
+        # No need for DIRECTORY case, node_content remains empty
+
+        # Ensure path_str is treated correctly (relative path)
+        display_path_str = str(self.path_str).replace(os.sep, '/')
+
+        parts = [
+            SEPARATOR,
+            f"{self.type.name}: {display_path_str}{link_info}",
+            SEPARATOR,
+            f"{node_content}", # Use the retrieved content
+        ]
+
+        return "\n".join(parts) + "\n\n"

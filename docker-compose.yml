@@ -1,6 +1,13 @@
+#version: '3.9' # Or newer, Portainer typically supports recent versions
 services:
   codeingest:
       build:
         context: .
-        no_cache: true
+#        no_cache: true
+#      container_name: codeingest_web
       image: codeingest:latest
+      mem_limit: 1g
+      cpu_shares: 768
+      ports:
+        - "8800:8800" # Expose port 9000 from the container to the host (HOST_PORT:CONTAINER_PORT)
+      restart: on-failure:5

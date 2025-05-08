@@ -29,16 +29,20 @@ priority = "primary"
 [tool.poetry.dependencies]
 python = ">=3.10,<4"
 click = ">=8.0.0"
-fastapi = { version = ">=0.109.1", extras = ["standard"] }
+fastapi = "^0.109.1"
+#fastapi = { version = "^0.109.1", extras = ["standard"] }
 pydantic = "*"
 slowapi = "*"
 tiktoken = "*"
-uvicorn = "^0.34.2"
+uvicorn = {version = "^0.34.2", extras = ["standard"]}
 tomli = { version = "*", python = "<3.11" } # Required for Python < 3.11 to parse TOML
 poetry-dynamic-versioning = "^1.7.1"
 typing-extensions = "^4.13.2"
 httpcore = ">=1.0.0,<2.0.0"
 chardet = "^5.2.0"
+httpx = "<0.27"
+python-multipart = "*"
+pathspec = "*"
 
 [tool.poetry.group.dev.dependencies]
 black = "*"
@@ -106,7 +110,11 @@ python_classes = "Test*"
 python_functions = "test_*"
 # addopts = "--cov-report=term-missing --cov-report=xml" # Removed --cov=CodeIngest
 addopts = "--cov=src/CodeIngest --cov-report=term-missing --cov-report=xml"
-
+filterwarnings = [
+    # Ignore the specific PendingDeprecationWarning from starlette.formparsers about multipart
+    "ignore:Please use `import python_multipart` instead.:PendingDeprecationWarning:starlette.formparsers",
+    # You can add other filters here if needed
+]
 
 # --- ADD Coverage Configuration ---
 [tool.coverage.run]
