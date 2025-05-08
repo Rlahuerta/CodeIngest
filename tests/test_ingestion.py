@@ -15,7 +15,6 @@ from CodeIngest.config import MAX_DIRECTORY_DEPTH, MAX_FILES, MAX_TOTAL_SIZE_BYT
 from CodeIngest.utils.ignore_patterns import DEFAULT_IGNORE_PATTERNS
 from CodeIngest.utils.ingestion_utils import _should_exclude
 
-# (Fixtures remain the same)
 @pytest.fixture
 def temp_directory(tmp_path: Path) -> Path:
     test_dir = tmp_path / "test_repo_source"; test_dir.mkdir()
@@ -174,7 +173,7 @@ def test_apply_gitingest_file_ignore_patterns_not_list_or_set(temp_directory: Pa
     """Test `apply_gitingest_file` when ignore_patterns is not list/set."""
     gitingest_path = temp_directory / ".gitingest"; gitingest_path.write_text("[config]\nignore_patterns = 123")
     original_ignores = sample_query.ignore_patterns.copy()
-    # Remove match, just check for the warning type
+    # Check warning type only
     with pytest.warns(UserWarning):
         apply_gitingest_file(temp_directory, sample_query)
     assert sample_query.ignore_patterns == original_ignores
