@@ -1,5 +1,6 @@
 """This module contains the FastAPI router for downloading a digest file."""
 
+import re # Added import for regex
 from pathlib import Path
 from typing import Optional # Import Optional
 from fastapi import APIRouter, HTTPException, Query, Request # Import Request
@@ -59,12 +60,21 @@ async def download_ingest(
         raise HTTPException(status_code=404, detail="Digest file not found.")
 
     # --- Determine the filename for the Content-Disposition header ---
-    # Use the provided filename if it's valid, otherwise default
-    # Basic validation: ensure it's not empty and looks like a .txt file
-    if filename and filename.lower().endswith(".txt") and len(filename) > 4:
-         effective_download_filename = filename
-    else:
-         effective_download_filename = "digest.txt" # Default download name
+    effective_download_filename = "digest.txt" # Default download name
+    if filename:
+        # Normalize and basic sanitize
+        normalized_filename = filename.strip()
+        if normalized_filename.lower().endswith(".txt") and len(normalized_filename) > 4:
+            base_name = normalized_filename[:-4] # Remove .txt extension
+            # Ensure base_name is not empty and contains no path traversal or unsafe characters.
+            # A simple check is that the basename derived from Path is the same as the cleaned base_name.
+            # Also, limit length and check for allowed characters.
+            # This regex allows alphanumeric, underscore, hyphen, dot (dot is tricky as it's also extension sep)
+            # For simplicity, we'll allow dots in the base_name part here.
+            # More robust would be to disallow dots in base_name or have a stricter regex.
+            if base_name and Path(base_name).name == base_name and re.match(r"^[a-zA-Z0-9_.-]+$", base_name):
+                effective_download_filename = base_name + ".txt"
+            # If validation fails, it falls back to "digest.txt" set initially.
 
     # Use FileResponse to efficiently send the file
     return FileResponse(
