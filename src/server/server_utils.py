@@ -125,17 +125,23 @@ async def _process_folder(folder: Path) -> None:
     # Try to log repository URL before deletion
     try:
         txt_files = [f for f in folder.iterdir() if f.suffix == ".txt"]
-
-        # Extract owner and repository name from the filename
-        filename = txt_files[0].stem
-        if txt_files and "-" in filename:
-            owner, repo = filename.split("-", 1)
-            repo_url = f"{owner}/{repo}"
-
-            with open("history.txt", mode="a", encoding="utf-8") as history:
-                history.write(f"{repo_url}\n")
-
-    except Exception as exc:
+        if txt_files: # If there are .txt files
+            filename_stem = txt_files[0].stem # Use stem from the first .txt file found
+            original_filename = txt_files[0].name # For logging
+            if "-" in filename_stem:
+                owner, repo = filename_stem.split("-", 1)
+                repo_url = f"{owner}/{repo}"
+                with open("history.txt", mode="a", encoding="utf-8") as history:
+                    history.write(f"{repo_url}\n")
+            else:
+                # Log if filename doesn't contain a hyphen
+                logger.warning(
+                    "Could not parse repository name from filename '%s' in folder %s. Expected 'owner-repo.txt' format.",
+                    original_filename,
+                    folder
+                )
+        # If no .txt files, this block is skipped, no warning needed for that specifically
+    except Exception as exc: # Catches errors from iterdir, file access, open, write
         logger.warning("Error logging repository URL for %s: %s", folder, exc)
 
     # Delete the folder

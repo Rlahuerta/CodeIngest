@@ -10,11 +10,15 @@ from unittest.mock import patch, MagicMock, AsyncMock  # Removed call as it's no
 
 import pytest
 from fastapi.testclient import TestClient
+from fastapi import FastAPI # Added for test-specific app
+from slowapi import Limiter # Added for test-specific limiter
+from slowapi.util import get_remote_address # Added for test-specific limiter
 
 # Need ingest_async for one test case
 from CodeIngest.entrypoint import ingest, ingest_async  # Restore ingest_async import
 from CodeIngest.schemas import IngestionQuery
-from src.server.main import app  # Import app from src
+from src.server.main import app as main_app  # Import app from src, renamed to avoid conflict
+from src.server.routers.index import router as index_router # Import for test-specific app
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 # Corrected TEMPLATE_DIR path
@@ -23,10 +27,72 @@ TEMPLATE_DIR = BASE_DIR / "src" / "server" / "templates"
 
 @pytest.fixture(scope="module")
 def test_client():
-    """Create a test client fixture."""
-    with TestClient(app) as client_instance:
+    """Create a test client fixture using the main app."""
+    with TestClient(main_app) as client_instance:
         client_instance.headers.update({"Host": "localhost"})
         yield client_instance
+
+# Fixture for a TestClient with a high rate limit for specific tests
+@pytest.fixture(scope="function")
+def high_rate_limit_client():
+    """Provides a TestClient with a high rate limit for the index router."""
+    test_specific_app = FastAPI()
+
+    # Create a new limiter with high limits for this app instance
+    # Patching 'src.server.routers.index.limiter' to affect only the router instance used by test_specific_app
+    # This is tricky because the limiter is imported at the module level in routers.index
+    # A more robust way would be dependency injection for the limiter in the router.
+    # For now, we'll patch it where it's used if direct patching of the imported name works.
+    # This test demonstrates a common challenge. A direct patch might not work if the module
+    # has already imported 'limiter'.
+
+    # The router itself needs to be configured with this new limiter.
+    # One way: create a new router instance and apply a new limiter to it.
+    # This doesn't work because the decorator @limiter.limit uses the imported limiter.
+
+    # Alternative: Temporarily patch the global limiter from server_utils for these tests
+    # This is simpler if we accept modifying shared state for specific tests.
+    # For true isolation, the app/router would need to allow injecting the limiter.
+
+    # Let's try patching the limiter instance that index_router will use.
+    # This requires index_router to be re-imported or the patch to be applied before it's imported by the test_app.
+    # This is complex. For now, let's assume we create a new app and apply a NEW router instance
+    # if we could configure that router instance with a new limiter.
+    # Since we can't easily reconfigure the imported router's limiter, we'll create a new app
+    # and rely on the fact that the test client might create a new context for the limiter.
+    # This might not actually bypass the original limiter effectively without more invasive patching.
+
+    # Given the constraints, the most straightforward (though not perfectly isolated) way
+    # is to patch the limiter that the 'index_router' (imported from src.server.routers.index) uses.
+
+    # This will use the main_app's limiter settings unless we get more sophisticated with patching
+    # or app creation. For now, we'll just use a new TestClient instance.
+    # The rate limit failures indicate that the state of the global limiter is the issue.
+
+    # The simplest solution for testing is often to disable the limiter for those tests.
+    # We can do this by patching the limiter's 'enabled' attribute or its check method.
+
+    # Let's create a new app and include the index_router, then create a TestClient for it.
+    # This won't solve the shared limiter state problem directly without patching.
+    # The issue is that the limiter is global to the app.
+
+    # The tests are failing because the global limiter instance used by the main 'app'
+    # (and thus by the 'test_client' fixture) is accumulating hits across tests.
+    # The 'function' scope for test_client doesn't reset the limiter's internal state because
+    # the limiter itself is tied to the app, which is module-scoped effectively.
+
+    # The best way here is to patch the limiter's 'enabled' state for the duration of these tests.
+    # This requires the 'test_client' fixture to be function-scoped for this to be effective per-test.
+    # The provided 'test_client' fixture is module-scoped. Let's make it function-scoped for these tests.
+
+    # Re-defining a client specifically for these tests with a fresh app instance
+    # that gets a fresh limiter state (if limiter is re-initialized or reset effectively).
+    # The global limiter is in server.server_utils. We'll patch its 'enabled' state.
+
+    with patch("server.server_utils.limiter.enabled", False): # Disable limiter for these tests
+        with TestClient(main_app) as client:
+            client.headers.update({"Host": "localhost"})
+            yield client
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -188,9 +254,9 @@ async def test_large_repository(request):
 
 
 @pytest.mark.asyncio
-async def test_concurrent_requests(request):
+async def test_concurrent_requests(high_rate_limit_client: TestClient): # Use the new client
     """Test handling of multiple concurrent requests."""
-    client = request.getfixturevalue("test_client")
+    client = high_rate_limit_client # Use the client with limiter disabled
 
     def make_request():
         form_data = {
@@ -212,9 +278,9 @@ async def test_concurrent_requests(request):
 
 
 @pytest.mark.asyncio
-async def test_large_file_handling(request):
+async def test_large_file_handling(high_rate_limit_client: TestClient): # Use the new client
     """Test handling of repositories with large files."""
-    client = request.getfixturevalue("test_client")
+    client = high_rate_limit_client # Use the client with limiter disabled
     form_data = {
         "input_text": "https://github.com/octocat/Hello-World",  # This is a small repo
         "max_file_size": "10",  # Simulate a very small max_file_size via slider
@@ -230,9 +296,9 @@ async def test_large_file_handling(request):
 
 
 @pytest.mark.asyncio
-async def test_repository_with_patterns(request):
+async def test_repository_with_patterns(high_rate_limit_client: TestClient): # Use the new client
     """Test repository analysis with include/exclude patterns."""
-    client = request.getfixturevalue("test_client")
+    client = high_rate_limit_client # Use the client with limiter disabled
     form_data = {
         "input_text": "https://github.com/octocat/Hello-World",
         "max_file_size": "243",
