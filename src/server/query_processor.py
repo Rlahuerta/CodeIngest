@@ -160,7 +160,7 @@ async def process_query(
                 "summary": summary,
                 "tree": tree_data,
                 "content": content_str,
-                "query": query_obj_from_ingest.model_dump() if query_obj_from_ingest else None
+                "query": query_obj_from_ingest.model_dump(mode='json') if query_obj_from_ingest else None # Changed this line
             }
             file_content_to_write = json.dumps(data_to_save, indent=2)
         else: # Default to txt
