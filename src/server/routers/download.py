@@ -6,11 +6,13 @@ from fastapi import APIRouter, HTTPException, Query # Import Query
 from fastapi.responses import FileResponse
 
 from CodeIngest.config import TMP_BASE_PATH
+from server.server_utils import limiter # Added import
 
 router = APIRouter()
 
 
 @router.get("/download/{digest_id}")
+@limiter.limit("30/minute") # Added rate limit decorator
 async def download_ingest(
     digest_id: str,
     # --- Add filename query parameter ---

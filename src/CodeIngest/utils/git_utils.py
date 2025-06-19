@@ -56,9 +56,10 @@ async def ensure_git_installed() -> None:
     """
     try:
         await run_command("git", "--version")
-    except GitError as exc: # Catch the more specific GitError
-        logger.error("Git installation check failed.", exc_info=True)
-        raise GitError("Git is not installed or not accessible. Please install Git first.") from exc
+    except GitError: # Catch the more specific GitError
+        logger.error("Git installation check failed. 'git --version' command failed.", exc_info=True)
+        # Raise a new GitError with the specific message, not chaining the original 'run_command' error message.
+        raise GitError("Git is not installed or not accessible. Please install Git first.")
 
 
 async def check_repo_exists(url: str) -> bool:
@@ -107,10 +108,11 @@ async def check_repo_exists(url: str) -> bool:
 
     status_code_str = parts[1]
 
-    if status_code_str in ("200", "301", "302"): # 302 often redirects to actual repo page
+    # For host detection, 302 is too ambiguous. Only 200 and 301 are strong indicators.
+    if status_code_str in ("200", "301"):
         logger.debug("Repository check for %s returned status %s. Assuming exists.", url, status_code_str)
         return True
-    elif status_code_str == "404":
+    elif status_code_str == "404" or status_code_str == "302": # Treat 302 as not found for this purpose
         logger.debug("Repository check for %s returned status 404. Assuming does not exist.", url)
         return False
     elif status_code_str in ("401", "403"):
