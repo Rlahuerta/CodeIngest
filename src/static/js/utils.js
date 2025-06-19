@@ -103,32 +103,47 @@ function formatSize(sizeInKB) {
 }
 
 function initializeSlider() {
+    console.log("Attempting to initialize slider..."); // New log
     const slider = document.getElementById('file_size');
     const sizeValueDisplay = document.getElementById('size_value');
 
-    if (!slider || !sizeValueDisplay) {
-        // console.warn("Slider or size display element not found.");
+    if (!slider) {
+        console.error("Slider element #file_size not found."); // Changed to error
         return;
     }
+    if (!sizeValueDisplay) {
+        console.error("Size display element #size_value not found."); // Changed to error
+        return;
+    }
+    console.log("Slider and display elements found:", slider, sizeValueDisplay); // New log
 
     function updateSliderAppearance() {
+        console.log("updateSliderAppearance called."); // New log
         const value = parseInt(slider.value, 10);
         const max = parseInt(slider.max, 10);
 
-        // Update text display
+        console.log("Slider value:", value, "Max:", max); // New log
+
         const sizeInKB = logSliderToSize(value);
+        console.log("Calculated sizeInKB:", sizeInKB); // New log
         sizeValueDisplay.textContent = formatSize(sizeInKB);
 
-        // Update visual infill (background gradient)
         const percentage = (value / max) * 100;
+        console.log("Calculated percentage for background:", percentage); // New log
         slider.style.backgroundSize = percentage + '% 100%';
+        console.log("Updated text to:", sizeValueDisplay.textContent, "and backgroundSize to:", slider.style.backgroundSize); // New log
     }
 
     // Initial update
+    console.log("Calling initial updateSliderAppearance..."); // New log
     updateSliderAppearance();
 
     // Add event listener for changes
-    slider.addEventListener('input', updateSliderAppearance);
+    slider.addEventListener('input', function() { // Added function wrapper for logging
+        console.log("Slider 'input' event fired."); // New log
+        updateSliderAppearance();
+    });
+    console.log("Event listener added to slider."); // New log
 }
 
 function setupGlobalEnterHandler() { /* ... */ } // Assuming this is defined elsewhere or not critical for this task
