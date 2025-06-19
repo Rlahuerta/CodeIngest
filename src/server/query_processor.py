@@ -135,8 +135,7 @@ async def process_query(
             max_file_size=max_file_size,
             include_patterns=include_patterns,
             exclude_patterns=exclude_patterns,
-            branch=branch_or_tag if source_type == 'url_path' and branch_or_tag else None,
-            output=None # ingest_async no longer handles file writing
+            branch=branch_or_tag if source_type == 'url_path' and branch_or_tag else None
         )
         query_obj_from_ingest = ingestion_result["query_obj"] # Extract for convenience
 
