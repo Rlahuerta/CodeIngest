@@ -34,7 +34,7 @@ async def parse_query(
     include_patterns: Optional[Union[str, Set[str]]] = None,
     ignore_patterns: Optional[Union[str, Set[str]]] = None,
 ) -> IngestionQuery:
-    # ... (docstring) ...
+    # ... (docstring remains the same)
     query: IngestionQuery
     temp_extract_path: Optional[Path] = None
     original_zip_path: Optional[Path] = None
@@ -43,87 +43,91 @@ async def parse_query(
 
     source_path = Path(source)
     source_lower = source.lower()
-    source_type = None # file, dir, zip, remote, unknown
+    source_type_determined = None
 
     # --- Refined Source Type Detection ---
 
-    # 1. Check if it's potentially a ZIP (by extension)
-    is_potential_zip = source_lower.endswith(".zip")
+    # 1. If it ends with .zip, attempt to treat as ZIP first.
+    if source_lower.endswith(".zip"):
+        if not source_path.is_file():
+            # If it's named .zip but isn't an existing file, it's likely a path error.
+            raise ValueError(f"Local path not found: {source}")
+        try:
+            # Attempt to open as ZIP - this raises BadZipFile if invalid
+            with zipfile.ZipFile(source_path, 'r') as zf_test:
+                _ = zf_test.testzip() # Basic integrity check
 
-    # 2. Check Remote URL criteria first (more specific than just local existence)
-    parsed_source_url = urlparse(source)
-    has_scheme = parsed_source_url.scheme in ("https", "http")
-    has_known_host_domain = False
-    if parsed_source_url.netloc:
-        host_domain = parsed_source_url.netloc.lower()
-        if host_domain in KNOWN_GIT_HOSTS: has_known_host_domain = True
-    elif not has_scheme and not is_potential_zip: # Check string only if no scheme and not looking like zip
-         for host in KNOWN_GIT_HOSTS:
-             if source_lower.startswith(host + '/') or f'//{host}/' in source_lower:
-                 has_known_host_domain = True; break
-
-    is_remote_url = has_scheme or has_known_host_domain
-
-    # 3. If not remote, check if it exists locally (could be zip, dir, or file)
-    is_local = False
-    if not is_remote_url:
-        if source_path.exists():
-            is_local = True
-        else:
-            # Doesn't exist locally. Could it be a remote slug?
-            is_likely_slug = ("/" in source and "." not in source.split("/")[0] and not os.path.isabs(source))
-            if is_likely_slug:
-                is_remote_url = True # Treat as remote slug
-            else:
-                # Doesn't exist locally, doesn't look like a remote slug -> Path Not Found
-                raise ValueError(f"Local path not found: {source}")
-
-    # --- Processing Logic based on determined type ---
-    if is_local:
-        if is_potential_zip and source_path.is_file():
-            # It exists locally and ends with .zip - TRY to treat as zip
+            # If no error, it's a valid zip file path
+            source_type_determined = "zip"
+            # --- Handle ZIP Extraction ---
+            unique_id = str(uuid.uuid4())
+            base_extract_dir = TMP_BASE_PATH / "extracted_zips"; base_extract_dir.mkdir(parents=True, exist_ok=True)
+            temp_extract_path = base_extract_dir / unique_id; temp_extract_path.mkdir()
             try:
-                with zipfile.ZipFile(source_path, 'r') as zf_test: _ = zf_test.testzip()
-                # --- Handle Valid ZIP ---
-                source_type = "zip"
-                zip_path = source_path
-                unique_id = str(uuid.uuid4())
-                base_extract_dir = TMP_BASE_PATH / "extracted_zips"; base_extract_dir.mkdir(parents=True, exist_ok=True)
-                temp_extract_path = base_extract_dir / unique_id; temp_extract_path.mkdir()
-                try:
-                    with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-                        for member in zip_ref.namelist():
-                            if member.startswith('/') or '..' in member: shutil.rmtree(temp_extract_path, ignore_errors=True); raise ValueError(f"ZIP unsafe path: {member}")
-                        zip_ref.extractall(temp_extract_path)
-                    local_path_for_query = temp_extract_path; slug = zip_path.stem; original_zip_path = zip_path.resolve()
-                    query = IngestionQuery(local_path=local_path_for_query, slug=slug, id=unique_id, original_zip_path=original_zip_path, temp_extract_path=temp_extract_path, user_name=None, repo_name=None, url=None, subpath="/", type="zip", branch=None, commit=None)
-                except Exception as e: # Catch extraction errors
+                with zipfile.ZipFile(source_path, 'r') as zip_ref:
+                    for member in zip_ref.namelist():
+                        if member.startswith('/') or '..' in member:
+                            shutil.rmtree(temp_extract_path, ignore_errors=True); raise ValueError(f"ZIP contains unsafe path: {member}")
+                    zip_ref.extractall(temp_extract_path)
+                local_path_for_query = temp_extract_path; slug = source_path.stem; original_zip_path = source_path.resolve()
+                query = IngestionQuery(
+                    local_path=local_path_for_query, slug=slug, id=unique_id, original_zip_path=original_zip_path, temp_extract_path=temp_extract_path,
+                    user_name=None, repo_name=None, url=None, subpath="/", type="zip", branch=None, commit=None,
+                )
+            except zipfile.BadZipFile as e: # Should ideally be caught by the first check
+                    if temp_extract_path and temp_extract_path.exists(): shutil.rmtree(temp_extract_path, ignore_errors=True)
+                    raise zipfile.BadZipFile(f"Invalid ZIP file (extraction failed): {source}") from e
+            except Exception as e:
                     if temp_extract_path and temp_extract_path.exists(): shutil.rmtree(temp_extract_path, ignore_errors=True)
                     raise ValueError(f"Error processing ZIP file '{source}': {e}") from e
-            except zipfile.BadZipFile as e:
-                 # If it exists, ends with .zip, but is invalid -> raise BadZipFile
-                 raise zipfile.BadZipFile(f"Invalid ZIP file: {source}") from e
-            except Exception as e: # Catch other potential errors opening file
-                 raise ValueError(f"Error accessing local path '{source}': {e}") from e
-        elif source_path.is_dir() or source_path.is_file():
-             # --- Handle Local Dir/File ---
-             source_type = "local"
-             try: query = _parse_local_dir_path(source)
-             except Exception as e: raise ValueError(f"Error parsing local path '{source}': {e}") from e
-        else:
-             # Exists but is not file/dir (e.g., broken symlink)
+
+        except zipfile.BadZipFile as e:
+             # It IS an existing file ending with .zip, but invalid. Raise BadZipFile.
+             raise zipfile.BadZipFile(f"Invalid ZIP file: {source}") from e
+        except FileNotFoundError: # Should not happen if source_path.is_file() was true
+            raise ValueError(f"Local path not found: {source}") # Should be caught by is_file
+        except Exception as e: # Other errors opening/accessing the path
+            raise ValueError(f"Error accessing path '{source}': {e}")
+
+
+    # 2. If not identified and processed as a valid ZIP, check for Remote URL criteria
+    if source_type_determined is None:
+        parsed_source_url = urlparse(source)
+        has_scheme = parsed_source_url.scheme in ("https", "http")
+        has_known_host_domain = False
+        if parsed_source_url.netloc:
+            host_domain = parsed_source_url.netloc.lower()
+            if host_domain in KNOWN_GIT_HOSTS: has_known_host_domain = True
+        elif not has_scheme:
+             for host in KNOWN_GIT_HOSTS:
+                 if source_lower.startswith(host + '/') or f'//{host}/' in source_lower:
+                     has_known_host_domain = True; break
+
+        is_likely_slug_for_remote = ("/" in source and "." not in source.split("/")[0] and
+                                     not os.path.isabs(source) and not Path(source).exists())
+
+        if has_scheme or has_known_host_domain or (is_likely_slug_for_remote and from_web):
+            source_type_determined = "remote"
+            try: query = await _parse_remote_repo(source)
+            except ValueError as e: raise e
+            except Exception as e: raise ValueError(f"Error parsing remote source '{source}': {e}") from e
+
+    # 3. If not ZIP or Remote, treat as Local Path (which might be a non-zip file or a dir)
+    if source_type_determined is None:
+        if not source_path.exists():
+            raise ValueError(f"Local path not found: {source}")
+        if not source_path.is_dir() and not source_path.is_file():
              raise ValueError(f"Local path exists but is not a file or directory: {source}")
 
-    elif is_remote_url:
-        # --- Handle Remote URL ---
-        source_type = "remote"
-        try: query = await _parse_remote_repo(source)
-        except ValueError as e: raise e
-        except Exception as e: raise ValueError(f"Error parsing remote source '{source}': {e}") from e
+        source_type_determined = "local" # Could be local file or dir
+        try: query = _parse_local_dir_path(source)
+        except Exception as e: raise ValueError(f"Error parsing local path '{source}': {e}") from e
 
-    else:
-        # Should be unreachable due to prior existence check or slug check
-        raise ValueError(f"Unable to determine source type for: {source}")
+    # --- Final Guard ---
+    if source_type_determined is None or 'query' not in locals():
+        # This implies it wasn't a valid zip (failed testzip), not remote, and not an existing local file/dir.
+        # This primarily catches cases like a non-existent path that *doesn't* end in .zip.
+        raise ValueError(f"Local path not found: {source}")
 
 
     # --- Process Patterns & Update Query ---
@@ -137,8 +141,7 @@ async def parse_query(
     query.max_file_size = max_file_size
     query.ignore_patterns = ignore_patterns_set
     query.include_patterns = parsed_include
-    # Set type explicitly if it's local (and not zip)
-    if source_type == 'local' and query.type is None: query.type = 'local'
+    if source_type_determined == 'local' and query.type is None: query.type = 'local'
 
     return query
 

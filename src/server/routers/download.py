@@ -2,16 +2,19 @@
 
 from pathlib import Path
 from typing import Optional # Import Optional
-from fastapi import APIRouter, HTTPException, Query # Import Query
+from fastapi import APIRouter, HTTPException, Query, Request # Import Request
 from fastapi.responses import FileResponse
 
 from CodeIngest.config import TMP_BASE_PATH
+from server.server_utils import limiter # Added import
 
 router = APIRouter()
 
 
 @router.get("/download/{digest_id}")
+@limiter.limit("30/minute") # Added rate limit decorator
 async def download_ingest(
+    request: Request, # Added request parameter
     digest_id: str,
     # --- Add filename query parameter ---
     filename: Optional[str] = Query(None, description="Desired filename for the download.")
@@ -25,6 +28,8 @@ async def download_ingest(
 
     Parameters
     ----------
+    request : Request
+        The FastAPI Request object, used by the rate limiter.
     digest_id : str
         The unique identifier for the digest, corresponding to a directory
         under TMP_BASE_PATH.

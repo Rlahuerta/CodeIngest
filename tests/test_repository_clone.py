@@ -103,7 +103,7 @@ async def test_clone_nonexistent_repository() -> None:
     [
         (b"HTTP/1.1 200 OK\n", 0, True),  # Existing repo
         (b"HTTP/1.1 404 Not Found\n", 0, False),  # Non-existing repo
-        (b"HTTP/1.1 302 Found\n", 0, False),  # Redirect (treated as not found)
+        (b"HTTP/1.1 302 Found\n", 0, False),  # Redirect (now treated as False again)
         (b"HTTP/1.1 301 Moved Permanently\n", 0, True), # Permanent redirect (treated as found)
         (b"HTTP/1.1 200 OK\n", 1, False),  # Failed request (non-zero return code)
         (b"", 1, False), # Empty output, non-zero return code
@@ -131,9 +131,10 @@ async def test_check_repo_exists(mock_stdout: bytes, return_code: int, expected:
         assert repo_exists is expected
 
 @pytest.mark.asyncio
-async def test_check_repo_exists_unexpected_status() -> None:
+async def test_check_repo_exists_unexpected_status(caplog: pytest.LogCaptureFixture) -> None:
     """
     Test check_repo_exists with an unexpected status line.
+    It should now log a warning and return False, not raise RuntimeError.
     """
     url = "https://github.com/user/repo"
     with patch("asyncio.create_subprocess_exec", new_callable=AsyncMock) as mock_exec:
@@ -142,8 +143,15 @@ async def test_check_repo_exists_unexpected_status() -> None:
         mock_process.returncode = 0
         mock_exec.return_value = mock_process
 
-        with pytest.raises(RuntimeError, match="Unexpected status line: HTTP/1.1 500 Internal Server Error"):
-            await check_repo_exists(url)
+        repo_exists = await check_repo_exists(url)
+        assert repo_exists is False
+        assert "Repository check for https://github.com/user/repo returned unexpected HTTP status 500" in caplog.text
+        for record in caplog.records:
+            if "unexpected HTTP status 500" in record.message:
+                assert record.levelname == "WARNING"
+                break
+        else:
+            assert False, "Expected warning log for unexpected status not found."
 
 
 @pytest.mark.asyncio
@@ -259,7 +267,7 @@ async def test_check_repo_exists_with_redirect() -> None:
 
     Given a URL that responds with "302 Found":
     When `check_repo_exists` is called,
-    Then it should return `False`, indicating the repo is inaccessible.
+    Then it should return `False`, indicating the repo is not definitively found at that URL.
     """
     url = "https://github.com/user/repo"
     with patch("asyncio.create_subprocess_exec", new_callable=AsyncMock) as mock_exec:
@@ -270,7 +278,7 @@ async def test_check_repo_exists_with_redirect() -> None:
 
         repo_exists = await check_repo_exists(url)
 
-        assert repo_exists is False
+        assert repo_exists is False # Changed back to False
 
 
 @pytest.mark.asyncio
@@ -568,8 +576,10 @@ async def test_ensure_git_installed_success() -> None:
 @pytest.mark.asyncio
 async def test_ensure_git_installed_failure() -> None:
     """Test ensure_git_installed when git is not installed."""
-    with patch("CodeIngest.utils.git_utils.run_command", side_effect=RuntimeError("git not found")) as mock_run_command:
-        with pytest.raises(RuntimeError, match="Git is not installed or not accessible."):
+    # Import GitError here locally to avoid circular dependency if it's at module level
+    from CodeIngest.utils.exceptions import GitError
+    with patch("CodeIngest.utils.git_utils.run_command", side_effect=GitError("git not found")) as mock_run_command:
+        with pytest.raises(GitError, match="Git is not installed or not accessible. Please install Git first."):
             await ensure_git_installed()
         mock_run_command.assert_called_once_with("git", "--version")
 

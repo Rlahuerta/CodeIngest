@@ -5,6 +5,7 @@ import os
 import pytest
 import warnings
 import zipfile
+import logging # <--- ADDED IMPORT
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
@@ -127,15 +128,19 @@ def test_ingest_query_nonexistent_path(sample_query: IngestionQuery) -> None:
         ingest_query(sample_query)
 
 
-def test_ingest_query_single_file_no_content(temp_directory: Path, sample_query: IngestionQuery) -> None:
+def test_ingest_query_single_file_no_content(temp_directory: Path, sample_query: IngestionQuery, caplog: pytest.LogCaptureFixture) -> None:
     """Test `ingest_query` with a single non-text file."""
     binary_file = temp_directory / "non_text_file.bin"
     binary_file.write_bytes(b'\x00\x01\x02\x03')
     sample_query.local_path = binary_file
     sample_query.slug = binary_file.stem
 
-    with pytest.warns(UserWarning, match="File non_text_file.bin has no readable text content or encountered error."):
-         summary, tree_data, content = ingest_query(sample_query)
+    summary, tree_data, content = ingest_query(sample_query)
+    # Check if the specific log message exists and has the correct level
+    assert any(
+        "File non_text_file.bin has no readable text content or encountered an error during initial read." in record.message and record.levelname == "WARNING"
+        for record in caplog.records
+    ), "Expected warning log for non-text file not found or incorrect level."
 
     # Corrected assertion for single file summary
     assert f"Source: {binary_file.stem}" in summary
@@ -158,10 +163,14 @@ def test_apply_gitingest_file_basic(temp_directory: Path, sample_query: Ingestio
     assert "build/*" in sample_query.ignore_patterns; assert ".git" in sample_query.ignore_patterns
     assert len(sample_query.ignore_patterns) > initial_ignore_count
 
-def test_apply_gitingest_file_invalid_toml(temp_directory: Path, sample_query: IngestionQuery) -> None:
+def test_apply_gitingest_file_invalid_toml(temp_directory: Path, sample_query: IngestionQuery, caplog: pytest.LogCaptureFixture) -> None:
     gitingest_path = temp_directory / ".gitingest"; gitingest_path.write_text("[config\nignore_patterns = [")
     original_ignores = sample_query.ignore_patterns.copy()
-    with pytest.warns(UserWarning, match="Invalid TOML in"): apply_gitingest_file(temp_directory, sample_query)
+    apply_gitingest_file(temp_directory, sample_query)
+    assert any(
+        "Invalid TOML in" in record.message and "Expected ']'" in record.message and record.levelname == "WARNING"
+        for record in caplog.records
+    ), "Expected warning for invalid TOML not found or incorrect level."
     assert sample_query.ignore_patterns == original_ignores
 
 def test_apply_gitingest_file_missing_config_section(temp_directory: Path, sample_query: IngestionQuery) -> None:
@@ -169,40 +178,49 @@ def test_apply_gitingest_file_missing_config_section(temp_directory: Path, sampl
     original_ignores = sample_query.ignore_patterns.copy(); apply_gitingest_file(temp_directory, sample_query)
     assert sample_query.ignore_patterns == original_ignores
 
-def test_apply_gitingest_file_ignore_patterns_not_list_or_set(temp_directory: Path, sample_query: IngestionQuery) -> None:
+def test_apply_gitingest_file_ignore_patterns_not_list_or_set(temp_directory: Path, sample_query: IngestionQuery, caplog: pytest.LogCaptureFixture) -> None:
     """Test `apply_gitingest_file` when ignore_patterns is not list/set."""
     gitingest_path = temp_directory / ".gitingest"; gitingest_path.write_text("[config]\nignore_patterns = 123")
     original_ignores = sample_query.ignore_patterns.copy()
-    # Check warning type only
-    with pytest.warns(UserWarning):
-        apply_gitingest_file(temp_directory, sample_query)
+    apply_gitingest_file(temp_directory, sample_query)
+    assert any(
+        "Expected list/set for 'ignore_patterns', got <class 'int'>" in record.message and record.levelname == "WARNING"
+        for record in caplog.records
+    ), "Expected warning for non-list/set ignore_patterns not found or incorrect level."
     assert sample_query.ignore_patterns == original_ignores
 
-def test_apply_gitingest_file_ignore_patterns_with_non_strings(temp_directory: Path, sample_query: IngestionQuery) -> None:
+def test_apply_gitingest_file_ignore_patterns_with_non_strings(temp_directory: Path, sample_query: IngestionQuery, caplog: pytest.LogCaptureFixture) -> None:
     gitingest_path = temp_directory / ".gitingest"; gitingest_path.write_text('[config]\nignore_patterns = ["*.log", 123, "temp/"]')
     original_ignores = sample_query.ignore_patterns.copy()
-    with pytest.warns(UserWarning, match="Ignoring non-string patterns"): apply_gitingest_file(temp_directory, sample_query)
+    apply_gitingest_file(temp_directory, sample_query)
+    assert any(
+        "Ignoring non-string patterns" in record.message and "{123}" in record.message and record.levelname == "WARNING"
+        for record in caplog.records
+    ), "Expected warning for non-string patterns not found or incorrect level."
     assert "*.log" in sample_query.ignore_patterns; assert "temp/" in sample_query.ignore_patterns
     assert 123 not in sample_query.ignore_patterns
 
 # --- Tests for _process_node and _process_file using FileSystemStats flags ---
 
 @pytest.mark.filterwarnings("ignore:coroutine 'AsyncMockMixin._execute_mock_call' was never awaited")
-def test_process_node_oserror_iterdir(temp_directory: Path, sample_query: IngestionQuery) -> None:
+def test_process_node_oserror_iterdir(temp_directory: Path, sample_query: IngestionQuery, caplog: pytest.LogCaptureFixture) -> None:
     root_node = FileSystemNode(name="test_repo", type=FileSystemNodeType.DIRECTORY, path_str=".", path=temp_directory)
     stats = FileSystemStats()
     with patch.object(Path, "iterdir", side_effect=OSError("Permission denied")):
-        with pytest.warns(UserWarning, match=r"Cannot access directory contents .*Permission denied"):
-            _process_node(root_node, sample_query, stats, temp_directory)
+        _process_node(root_node, sample_query, stats, temp_directory)
+    assert any(
+        r"Cannot access directory contents" in record.message and "Permission denied" in record.message and record.levelname == "WARNING"
+        for record in caplog.records
+    ), "Expected warning for iterdir OSError not found or incorrect level."
     assert len(root_node.children) == 0; assert stats.total_files == 0
 
 def test_process_node_symlink(temp_directory: Path, sample_query: IngestionQuery) -> None:
     root_node = FileSystemNode(name="test_repo", type=FileSystemNodeType.DIRECTORY, path_str=".", path=temp_directory)
-    stats = FileSystemStats(); sample_query.ignore_patterns = set(); sample_query.include_patterns = None
-    _process_node(root_node, sample_query, stats, temp_directory)
+    stats = FileSystemStats(); sample_query.ignore_patterns = set(); sample_query.include_patterns = None # Reset patterns for this test
+    _process_node(root_node, sample_query, stats, temp_directory) # Process all files
     symlink_node = next((child for child in root_node.children if child.name == "symlink_to_file1"), None)
     assert symlink_node is not None; assert symlink_node.type == FileSystemNodeType.SYMLINK
-    assert symlink_node.path_str == "symlink_to_file1"; assert stats.total_files > 0
+    assert symlink_node.path_str == "symlink_to_file1"; assert stats.total_files > 0 # Check if any file was processed, including symlink
 
 def test_process_node_symlink_excluded_by_include(temp_directory: Path, sample_query: IngestionQuery) -> None:
     root_node = FileSystemNode(name="test_repo", type=FileSystemNodeType.DIRECTORY, path_str=".", path=temp_directory)
@@ -211,49 +229,73 @@ def test_process_node_symlink_excluded_by_include(temp_directory: Path, sample_q
     symlink_node = next((child for child in root_node.children if child.name == "symlink_to_file1"), None)
     assert symlink_node is None
 
-def test_process_file_oserror_stat(temp_directory: Path, sample_query: IngestionQuery) -> None:
+def test_process_file_oserror_stat(temp_directory: Path, sample_query: IngestionQuery, caplog: pytest.LogCaptureFixture) -> None:
     parent_node = FileSystemNode(name=".", type=FileSystemNodeType.DIRECTORY, path_str=".", path=temp_directory)
     stats = FileSystemStats(); file_path = temp_directory / "stat_error.txt"; file_path.touch()
     with patch.object(Path, 'stat', side_effect=OSError("Stat failed")):
-        with pytest.warns(UserWarning, match="Could not stat file"):
-            _process_file(file_path, parent_node, stats, temp_directory, sample_query.max_file_size)
+        _process_file(file_path, parent_node, stats, temp_directory, sample_query.max_file_size)
+    assert any(
+        "Could not stat file" in record.message and "Stat failed" in record.message and record.levelname == "WARNING"
+        for record in caplog.records
+    ), "Expected warning for stat OSError not found or incorrect level."
     assert len(parent_node.children) == 0; assert stats.total_files == 0
 
-def test_process_file_exceeds_max_file_size(temp_directory: Path, sample_query: IngestionQuery) -> None:
+def test_process_file_exceeds_max_file_size(temp_directory: Path, sample_query: IngestionQuery, caplog: pytest.LogCaptureFixture) -> None:
     parent_node = FileSystemNode(name=".", type=FileSystemNodeType.DIRECTORY, path_str=".", path=temp_directory)
     stats = FileSystemStats(); file_path = temp_directory / "large.bin"; file_path.write_text("a" * (sample_query.max_file_size + 10))
-    with pytest.warns(UserWarning, match="Skipping file large.bin .* exceeds max file size"):
-        _process_file(file_path, parent_node, stats, temp_directory, sample_query.max_file_size)
+    # Ensure the logger for the module under test is set to capture INFO
+    caplog.set_level(logging.INFO, logger="CodeIngest.ingestion")
+    _process_file(file_path, parent_node, stats, temp_directory, sample_query.max_file_size)
+    assert any(
+        "Skipping file large.bin" in record.message and "exceeds max file size" in record.message and record.levelname == "INFO"
+        for record in caplog.records
+    ), "Expected info log for max file size exceeded not found or incorrect level."
     assert len(parent_node.children) == 0; assert stats.total_files == 0
 
-def test_process_file_exceeds_total_size_limit(temp_directory: Path, sample_query: IngestionQuery) -> None:
+def test_process_file_exceeds_total_size_limit(temp_directory: Path, sample_query: IngestionQuery, caplog: pytest.LogCaptureFixture) -> None:
     parent_node = FileSystemNode(name=".", type=FileSystemNodeType.DIRECTORY, path_str=".", path=temp_directory)
     stats = FileSystemStats(); stats.total_size = MAX_TOTAL_SIZE_BYTES - 5
     file_path = temp_directory / "pushover.txt"; file_path.write_text("This is more than 5 bytes")
-    with pytest.warns(UserWarning, match=r"Total size limit .* reached."):
-         _process_file(file_path, parent_node, stats, temp_directory, sample_query.max_file_size)
+    caplog.set_level(logging.INFO, logger="CodeIngest.ingestion")
+    _process_file(file_path, parent_node, stats, temp_directory, sample_query.max_file_size)
+    assert any(
+        "Total size limit" in record.message and "reached" in record.message and record.levelname == "INFO"
+        for record in caplog.records
+    ), "Expected info log for total size limit reached not found or incorrect level."
     assert len(parent_node.children) == 0; assert stats.total_size == MAX_TOTAL_SIZE_BYTES - 5
     assert stats.total_size_limit_reached is True
 
-def test_process_file_exceeds_total_file_limit(temp_directory: Path, sample_query: IngestionQuery) -> None:
+def test_process_file_exceeds_total_file_limit(temp_directory: Path, sample_query: IngestionQuery, caplog: pytest.LogCaptureFixture) -> None:
     parent_node = FileSystemNode(name=".", type=FileSystemNodeType.DIRECTORY, path_str=".", path=temp_directory)
     stats = FileSystemStats(); stats.total_files = MAX_FILES - 1
     file_ok = temp_directory / "ok.txt"; file_ok.touch()
     file_bad = temp_directory / "bad.txt"; file_bad.touch()
-    _process_file(file_ok, parent_node, stats, temp_directory, sample_query.max_file_size)
-    with pytest.warns(UserWarning, match=r"Maximum file limit .* reached."):
-        _process_file(file_bad, parent_node, stats, temp_directory, sample_query.max_file_size)
+    caplog.set_level(logging.INFO, logger="CodeIngest.ingestion")
+    _process_file(file_ok, parent_node, stats, temp_directory, sample_query.max_file_size) # This one should pass
+    # Clear previous logs from "ok.txt" processing if any, to only check "bad.txt" effect
+    caplog.clear()
+    _process_file(file_bad, parent_node, stats, temp_directory, sample_query.max_file_size) # This one should trigger limit
+    assert any(
+        "Maximum file limit" in record.message and "reached" in record.message and record.levelname == "INFO"
+        for record in caplog.records
+    ), "Expected info log for max file limit reached not found or incorrect level."
     assert len(parent_node.children) == 1; assert parent_node.children[0].name == "ok.txt"
     assert stats.total_files == MAX_FILES # Count stopped at limit
     assert stats.total_file_limit_reached is True
 
-def test_limit_exceeded_depth() -> None:
+def test_limit_exceeded_depth(caplog: pytest.LogCaptureFixture) -> None:
     stats = FileSystemStats(); depth = MAX_DIRECTORY_DEPTH + 1
-    with pytest.warns(UserWarning, match=f"Max directory depth \({MAX_DIRECTORY_DEPTH}\) reached."):
-        assert limit_exceeded(stats, depth) is True
+    caplog.set_level(logging.INFO, logger="CodeIngest.ingestion")
+    assert limit_exceeded(stats, depth) is True
+    # This will remove the SyntaxWarning for invalid escape sequences
+    expected_message = f"Max directory depth ({MAX_DIRECTORY_DEPTH}) reached."
+    assert any(
+        expected_message in record.message and record.levelname == "INFO"
+        for record in caplog.records
+    ), f"Expected info log for max depth reached ('{expected_message}') not found or incorrect level."
     assert stats.depth_limit_reached is True
 
-def test_limit_exceeded_file_count() -> None:
+def test_limit_exceeded_file_count(caplog: pytest.LogCaptureFixture) -> None:
     stats = FileSystemStats(); stats.total_file_limit_reached = True; depth = 0
     assert limit_exceeded(stats, depth) is True
 

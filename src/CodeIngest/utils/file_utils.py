@@ -84,10 +84,3 @@ def is_text_file(path: Path) -> bool:
 
 
     return False # Could not decode the chunk with any preferred encoding
-
-
-# This function is no longer needed here as read_chunks is in FileSystemNode
-# def read_file_in_chunks(file_path: Path, chunk_size: int = 8192) -> Iterator[str]:
-#     """Reads a file line by line or in chunks."""
-#     # ... (implementation moved to FileSystemNode)
-#     pass
