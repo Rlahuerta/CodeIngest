@@ -458,8 +458,11 @@ async def test_process_query_success_json_download(mock_ingest_async, mock_open,
     mock_query_obj.url = mock_repo_url
     mock_query_obj.branch = "main"
     mock_query_obj.commit = "abc123xyz" # Example commit
-    # Mock model_dump for query_obj
-    mock_query_obj.model_dump.return_value = {"url": mock_repo_url, "branch": "main", "commit": "abc123xyz", "local_path": "/tmp/clone/path"}
+
+    # Define the dictionary that model_dump(mode='json') is expected to return
+    # This will be used by both the SUT and the test's assertion construction.
+    expected_query_dump_content = {"url": mock_repo_url, "branch": "main", "commit": "abc123xyz", "local_path": str(TMP_BASE_PATH / mock_query_id / mock_repo_slug)} # Example with a more realistic path
+    mock_query_obj.model_dump.return_value = expected_query_dump_content
 
 
     mock_summary_str = "JSON Summary"
@@ -520,7 +523,7 @@ async def test_process_query_success_json_download(mock_ingest_async, mock_open,
         "summary": mock_summary_str,
         "metadata": expected_metadata_obj,
         "tree": mock_tree_data_val, # This is tree_data_with_embedded_content from output_formatters
-        "query": mock_query_obj.model_dump(mode='json')
+        "query": expected_query_dump_content # Use the predefined dictionary here
     }
 
     # Capture what was written to file
