@@ -4,6 +4,7 @@ import asyncio
 import math
 import shutil
 import time
+import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -18,6 +19,8 @@ from server.server_config import DELETE_REPO_AFTER
 
 # Initialize a rate limiter
 limiter = Limiter(key_func=get_remote_address)
+
+logger = logging.getLogger(__name__)
 
 
 async def rate_limit_exception_handler(request: Request, exc: Exception) -> Response:
@@ -105,7 +108,7 @@ async def _remove_old_repositories():
                 await _process_folder(folder)
 
         except Exception as exc:
-            print(f"Error in _remove_old_repositories: {exc}")
+            logger.error("Error in repository cleanup task: %s", exc, exc_info=True)
 
         await asyncio.sleep(60)
 
@@ -133,13 +136,13 @@ async def _process_folder(folder: Path) -> None:
                 history.write(f"{repo_url}\n")
 
     except Exception as exc:
-        print(f"Error logging repository URL for {folder}: {exc}")
+        logger.warning("Error logging repository URL for %s: %s", folder, exc)
 
     # Delete the folder
     try:
         shutil.rmtree(folder)
     except Exception as exc:
-        print(f"Error deleting {folder}: {exc}")
+        logger.error("Error deleting folder %s: %s", folder, exc, exc_info=True)
 
 
 def log_slider_to_size(position: int) -> int:
@@ -160,33 +163,3 @@ def log_slider_to_size(position: int) -> int:
     minv = math.log(1)
     maxv = math.log(102_400)
     return round(math.exp(minv + (maxv - minv) * pow(position / maxp, 1.5))) * 1024
-
-
-## Color printing utility
-class Colors:
-    """ANSI color codes"""
-
-    BLACK = "\033[0;30m"
-    RED = "\033[0;31m"
-    GREEN = "\033[0;32m"
-    BROWN = "\033[0;33m"
-    BLUE = "\033[0;34m"
-    PURPLE = "\033[0;35m"
-    CYAN = "\033[0;36m"
-    LIGHT_GRAY = "\033[0;37m"
-    DARK_GRAY = "\033[1;30m"
-    LIGHT_RED = "\033[1;31m"
-    LIGHT_GREEN = "\033[1;32m"
-    YELLOW = "\033[1;33m"
-    LIGHT_BLUE = "\033[1;34m"
-    LIGHT_PURPLE = "\033[1;35m"
-    LIGHT_CYAN = "\033[1;36m"
-    WHITE = "\033[1;37m"
-    BOLD = "\033[1m"
-    FAINT = "\033[2m"
-    ITALIC = "\033[3m"
-    UNDERLINE = "\033[4m"
-    BLINK = "\033[5m"
-    NEGATIVE = "\033[7m"
-    CROSSED = "\033[9m"
-    END = "\033[0m"

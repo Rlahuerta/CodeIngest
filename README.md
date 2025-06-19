@@ -18,10 +18,12 @@ You can also replace `hub` with `ingest` in any GitHub URL to access the corresp
 - **CLI Tool**: Run `codeingest` as a shell command.
 - **Python Package**: Import `CodeIngest` in your Python code.
 
-## 📚 Requirements
+## Prerequisites
 
-- Python 3.10+
-- Git installed on your system
+Before running CodeIngest, ensure you have the following command-line tools installed and available in your system's PATH:
+- **Python**: Version 3.10 or higher is required.
+- **Git**: Required for cloning and interacting with Git repositories.
+- **cURL**: Used by some utilities to check remote repository existence (specifically for `check_repo_exists` functionality).
 
 ### 📦 Installation
 

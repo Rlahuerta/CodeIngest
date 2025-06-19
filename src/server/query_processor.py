@@ -12,21 +12,25 @@ from starlette.templating import _TemplateResponse
 from urllib.parse import quote
 import zipfile # Ensure zipfile is imported
 import shutil  # Ensure shutil is imported
+import logging
 
 # --- Core CodeIngest imports ---
 from CodeIngest.entrypoint import ingest_async
 from CodeIngest.config import TMP_BASE_PATH
 from CodeIngest.output_formatters import TreeDataItem
+from CodeIngest.utils.exceptions import GitError, InvalidPatternError # Assuming IngestionError might be too broad for now
 
 # --- Server specific imports ---
 from server.server_config import EXAMPLE_REPOS, MAX_DISPLAY_SIZE, templates
-from server.server_utils import Colors, log_slider_to_size
+from server.server_utils import log_slider_to_size
 
 # Define paths for zip handling
 RAW_UPLOADS_PATH = TMP_BASE_PATH / "uploads"
 EXTRACTED_ZIPS_PATH = TMP_BASE_PATH / "extracted"
 RAW_UPLOADS_PATH.mkdir(parents=True, exist_ok=True)
 EXTRACTED_ZIPS_PATH.mkdir(parents=True, exist_ok=True)
+
+logger = logging.getLogger(__name__)
 
 def sanitize_filename_part(part: str) -> str:
     """Removes or replaces characters unsafe for filenames."""
@@ -134,7 +138,11 @@ async def process_query(
         )
 
         if not query_obj_from_ingest or not query_obj_from_ingest.id:
-            _print_error(effective_input_display, Exception("Ingestion succeeded but query ID was not returned."), max_file_size, pattern_type, pattern, branch_or_tag)
+            logger.error(
+                "Processing failed for '%s': Ingestion succeeded but query ID was not returned. Details: max_file_size=%s, pattern_type=%s, pattern='%s', branch_or_tag='%s'",
+                effective_input_display, max_file_size, pattern_type, pattern, branch_or_tag,
+                exc_info=True  # Include stack trace for unexpected internal errors
+            )
             context["error_message"] = "An unexpected error occurred: Ingestion ID missing."
             return templates.TemplateResponse(template, context=context)
 
@@ -151,7 +159,7 @@ async def process_query(
                      f.write(f"{item['prefix']}{item['name']}\n")
                  f.write("\n" + content_str)
         except OSError as e:
-            print(f"Error writing digest file {digest_path}: {e}")
+            logger.error("Error writing digest file %s: %s", digest_path, e, exc_info=True)
             ingest_id_for_download = None # Invalidate if save failed
             context["error_message"] = f"Error saving digest: {e}"
 
@@ -178,10 +186,18 @@ async def process_query(
         # Prepare content for display (cropping if too large)
         content_to_display = content_str[:MAX_DISPLAY_SIZE] + ("\n(Files content cropped to first characters...)" if len(content_str) > MAX_DISPLAY_SIZE else "")
 
-        _print_success(
-            url_or_path=effective_input_display, max_file_size=max_file_size,
-            pattern_type=pattern_type, pattern=pattern, summary=summary,
-            branch_or_tag=branch_or_tag # Log the user's original input for ref
+        # Prepare a concise summary for logging
+        summary_for_log = "N/A"
+        try:
+            token_line = next((line for line in summary.splitlines() if "Estimated tokens:" in line), None)
+            if token_line:
+                summary_for_log = token_line.strip()
+        except Exception:
+            pass # Keep N/A if parsing fails
+
+        logger.info(
+            "Processing successful for '%s'. Summary: %s. Details: max_file_size=%s, pattern_type=%s, pattern='%s', branch_or_tag='%s'",
+            effective_input_display, summary_for_log, max_file_size, pattern_type, pattern, branch_or_tag
         )
 
         context.update({
@@ -194,43 +210,46 @@ async def process_query(
         })
         return templates.TemplateResponse(template, context=context)
 
+    except GitError as e:
+        logger.error("GitError occurred while processing '%s': %s. Details: max_file_size=%s, pattern_type=%s, pattern='%s', branch_or_tag='%s'",
+                     effective_input_display, e, max_file_size, pattern_type, pattern, branch_or_tag, exc_info=True)
+        context["error_message"] = f"Git operation failed: {e}. Ensure your Git URL is correct, the repository is accessible, and Git is installed on the server."
+        return templates.TemplateResponse(template, context=context, status_code=500) # Or 400 if client error
+
+    except zipfile.BadZipFile as e:
+        logger.error("BadZipFile occurred while processing '%s': %s. Details: max_file_size=%s, pattern_type=%s, pattern='%s'",
+                     effective_input_display, e, max_file_size, pattern_type, pattern, exc_info=True)
+        context["error_message"] = f"The uploaded file '{original_filename_for_slug or effective_input_display}' is not a valid ZIP file or is corrupted. Details: {e}"
+        return templates.TemplateResponse(template, context=context, status_code=400)
+
+    except InvalidPatternError as e:
+        logger.error("InvalidPatternError occurred for '%s': %s. Details: max_file_size=%s, pattern_type=%s, pattern='%s'",
+                     effective_input_display, e, max_file_size, pattern_type, pattern, exc_info=True)
+        context["error_message"] = f"Invalid include/exclude pattern provided: {e}"
+        return templates.TemplateResponse(template, context=context, status_code=400)
+
+    except ValueError as e:
+        logger.warning(
+            "ValueError during processing for '%s': %s. Details: max_file_size=%s, pattern_type=%s, pattern='%s', branch_or_tag='%s'",
+            effective_input_display, e, max_file_size, pattern_type, pattern, branch_or_tag,
+            exc_info=True # ValueErrors can sometimes have useful stack traces for debugging config issues
+        )
+        str_e_lower = str(e).lower()
+        if "local path not found" in str_e_lower:
+            context["error_message"] = f"Error: Local path not found: {effective_input_display}"
+        elif "repository not found" in str_e_lower or "could not access" in str_e_lower: # Catchall for repo access issues not caught by GitError
+            context["error_message"] = f"Error: Could not access '{effective_input_display}'. Ensure URL/path is correct, public, and branch/tag/commit exists."
+        # "invalid characters" for patterns should ideally be caught by InvalidPatternError if parsing is robust
+        else:
+            context["error_message"] = f"Invalid input or configuration: {e}"
+        return templates.TemplateResponse(template, context=context, status_code=400)
+
     except Exception as exc:
-        _print_error(effective_input_display, exc, max_file_size, pattern_type, pattern, branch_or_tag)
-        context["error_message"] = f"Error processing '{effective_input_display}': {exc}"
-        str_exc = str(exc).lower()
-        if "repository not found" in str_exc or "404" in str_exc or "405" in str_exc:
-            context["error_message"] = (f"Error: Could not access '{effective_input_display}'. Ensure URL/path is correct, public, and branch/tag/commit exists.")
-        elif "local path not found" in str_exc:
-             context["error_message"] = f"Error: Local path not found: {effective_input_display}"
-        elif isinstance(exc, ValueError) and "invalid characters" in str_exc:
-             context["error_message"] = f"Error: Invalid pattern provided. {exc}"
-        elif "timed out" in str_exc:
-             context["error_message"] = f"Error: Operation timed out processing '{effective_input_display}'."
-        elif "zipfile.badzipfile" in str_exc or "invalid zip file" in str_exc :
-             context["error_message"] = f"Error: The uploaded file '{effective_input_display}' is not a valid ZIP file."
-        return templates.TemplateResponse(template, context=context)
-
-
-# Logging functions
-def _print_query(url_or_path: str, max_file_size: int, pattern_type: str, pattern: str, branch_or_tag: str = "") -> None:
-    print(f"{Colors.WHITE}{url_or_path:<50}{Colors.END}", end="")
-    if branch_or_tag: print(f" | {Colors.CYAN}Ref: {branch_or_tag}{Colors.END}", end="")
-    default_log_size = log_slider_to_size(243)
-    if max_file_size != default_log_size: print(f" | {Colors.YELLOW}Size: {int(max_file_size/1024)}kb{Colors.END}", end="")
-    if pattern:
-        ptype = "Include" if pattern_type == "include" else "Exclude"
-        print(f" | {Colors.YELLOW}{ptype}: '{pattern}'{Colors.END}", end="")
-
-def _print_error(url_or_path: str, e: Exception, max_file_size: int, pattern_type: str, pattern: str, branch_or_tag: str = "") -> None:
-    print(f"{Colors.BROWN}WARN{Colors.END}: {Colors.RED}<- Process Failed {Colors.END}", end="")
-    _print_query(url_or_path, max_file_size, pattern_type, pattern, branch_or_tag)
-    print(f" | {Colors.RED}{type(e).__name__}: {e}{Colors.END}")
-
-def _print_success(url_or_path: str, max_file_size: int, pattern_type: str, pattern: str, summary: str, branch_or_tag: str = "") -> None:
-    try:
-        token_line = next((line for line in summary.splitlines() if "Estimated tokens:" in line), None)
-        estimated_tokens = token_line.split(":", 1)[1].strip() if token_line else "N/A"
-    except Exception: estimated_tokens = "N/A"
-    print(f"{Colors.GREEN}INFO{Colors.END}: {Colors.GREEN}<- Process OK    {Colors.END}", end="")
-    _print_query(url_or_path, max_file_size, pattern_type, pattern, branch_or_tag)
-    print(f" | {Colors.PURPLE}Tokens: {estimated_tokens}{Colors.END}")
+        logger.error(
+            "Unexpected error processing failed for '%s': %s. Details: max_file_size=%s, pattern_type=%s, pattern='%s', branch_or_tag='%s'",
+            effective_input_display, exc, max_file_size, pattern_type, pattern, branch_or_tag,
+            exc_info=True
+        )
+        # Generic error message for unexpected issues
+        context["error_message"] = f"An unexpected error occurred while processing '{effective_input_display}'. Please try again or contact support if the issue persists."
+        return templates.TemplateResponse(template, context=context, status_code=500)

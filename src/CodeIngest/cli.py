@@ -55,18 +55,25 @@ async def _async_main(
         # Determine output filename if not provided
         if not output:
             output_filename_candidate = OUTPUT_FILE_NAME # Default fallback
-            # Try to create a more specific name (basic version)
-            if "/" in source or "\\" in source: # Likely a path or URL
+            name_part = ""
+
+            # If source is current directory, use its name
+            if source == ".":
+                name_part = Path(".").resolve().name
+            # Else, if it's a path or URL, extract the last part
+            elif "/" in source or "\\" in source:
                 name_part = source.split('/')[-1].split('\\')[-1]
-                if name_part.endswith(".git"): name_part = name_part[:-4]
-                if name_part and name_part != ".":
-                     # Basic sanitization
-                    sanitized_name = "".join(c if c.isalnum() or c in ['_', '.', '-'] else '_' for c in name_part)
-                    if branch:
-                        sanitized_branch = "".join(c if c.isalnum() or c in ['_', '.', '-'] else '_' for c in branch)
-                        output_filename_candidate = f"{sanitized_name}_{sanitized_branch}.txt"
-                    else:
-                        output_filename_candidate = f"{sanitized_name}.txt"
+                if name_part.endswith(".git"):
+                    name_part = name_part[:-4]
+
+            # If a valid name_part was derived (not empty or just "."), sanitize and use it
+            if name_part and name_part != ".":
+                sanitized_name = "".join(c if c.isalnum() or c in ['_', '.', '-'] else '_' for c in name_part)
+                if branch:
+                    sanitized_branch = "".join(c if c.isalnum() or c in ['_', '.', '-'] else '_' for c in branch)
+                    output_filename_candidate = f"{sanitized_name}_{sanitized_branch}.txt"
+                else:
+                    output_filename_candidate = f"{sanitized_name}.txt"
 
             output = output_filename_candidate
 
