@@ -99,35 +99,37 @@ async def _async_main(
                 click.echo(f"Warning: Output format is '{output_format}' but output file extension is '{current_ext}'. Consider using '{expected_ext}'.", err=True)
 
 
-        # ingest_async now returns 4 values, pass output=None
-        summary, tree_data, content_str, query_obj = await ingest_async(
+        # ingest_async now returns a dictionary
+        ingestion_result = await ingest_async(
             source,
             max_file_size=max_size,
             include_patterns=include_patterns_set,
             exclude_patterns=exclude_patterns_set,
-            branch=branch,
-            output=None # Pass None to prevent internal writing
+            branch=branch
+            # output=None is implicitly handled as ingest_async no longer uses it for writing
         )
 
         payload_str: str
         if output_format == 'json':
+            query_obj = ingestion_result["query_obj"] # Get the query object
+            metadata_obj = {
+                "repository_url": query_obj.url if query_obj else None,
+                "branch": query_obj.branch if query_obj else None,
+                "commit": query_obj.commit if query_obj else None,
+                "number_of_tokens": ingestion_result["num_tokens"],
+                "number_of_files": ingestion_result["num_files"],
+                "directory_structure_text": ingestion_result["directory_structure_text"] # Renamed key
+            }
             data_dict = {
-                "summary": summary,
-                "tree": tree_data, # tree_data is already a list of dicts
-                "content": content_str,
-                "query": query_obj.model_dump(mode='json') if query_obj else None # Changed this line
+                "summary": ingestion_result["summary_str"],
+                "metadata": metadata_obj,
+                "tree": ingestion_result["tree_data"], # This is tree_data_with_embedded_content
+                "query": query_obj.model_dump(mode='json') if query_obj else None
             }
             payload_str = json.dumps(data_dict, indent=2)
         else: # txt format
-            formatted_tree_lines = []
-            for item in tree_data: # tree_data is a list of dicts
-                formatted_tree_lines.append(f"{item.get('prefix', '')}{item.get('name', '')}") # Use .get for safety
-            formatted_tree = "\n".join(formatted_tree_lines)
-            # Construct the text payload, ensuring summary is not duplicated if printed to console
-            # The original text digest structure was: summary, then dir structure, then content
-            # Summary is printed to console for txt, so payload for file is just structure and content
-            payload_str = f"Directory structure:\n{formatted_tree}\n\n{content_str}"
-
+            # Using the self-corrected approach for TXT payload
+            payload_str = f"Directory structure:\n{ingestion_result['directory_structure_text']}\n\n{ingestion_result['concatenated_content']}"
 
         with open(final_output_path, "w", encoding="utf-8") as f:
             f.write(payload_str)
@@ -135,7 +137,7 @@ async def _async_main(
         click.echo(f"Analysis complete! Output written to: {final_output_path}")
         if output_format == 'txt':
             click.echo("\nSummary:")
-            click.echo(summary)
+            click.echo(ingestion_result["summary_str"]) # Use summary_str from result
         # If JSON and output is to a file (which we assume for now), summary is in the file.
 
     except Exception as exc:

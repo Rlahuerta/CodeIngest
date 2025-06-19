@@ -12,45 +12,95 @@ from CodeIngest.schemas import FileSystemNode, FileSystemNodeType
 
 TreeDataItem = Dict[str, Any]
 
-def format_node(node: FileSystemNode, query: IngestionQuery) -> Tuple[str, List[TreeDataItem], str]:
+# New return type for format_node
+FormattedNodeData = Dict[str, Any]
+
+
+def _parse_token_estimate_str_to_int(token_str: Optional[str]) -> int:
+    if not token_str:
+        return 0
+    token_str_lower = token_str.lower() # Use a different variable name
+    multiplier = 1
+    if 'k' in token_str_lower:
+        multiplier = 1000
+        token_str_val = token_str_lower.replace('k', '').strip()
+    elif 'm' in token_str_lower:
+        multiplier = 1_000_000
+        token_str_val = token_str_lower.replace('m', '').strip()
+    else:
+        token_str_val = token_str_lower.strip()
+    try:
+        return int(float(token_str_val) * multiplier)
+    except ValueError:
+        # Fallback for plain numbers if any or handle error
+        try:
+            return int(token_str_val)
+        except ValueError:
+            return 0
+
+def format_node(node: FileSystemNode, query: IngestionQuery) -> FormattedNodeData: # Changed return type
     """
-    Generate a summary, structured tree data, and file contents for a given file system node.
-    # ... (docstring remains the same)
+    Generate a structured dictionary containing summary, tree data with embedded content,
+    directory structure text, token count, file count, and concatenated content.
     """
     is_single_file = node.type == FileSystemNodeType.FILE
     summary = _create_summary_prefix(query, single_file=is_single_file)
 
+    # Original summary part for file count/lines - this might be slightly different now
+    # as num_files will be derived from tree_data post-symlink filtering.
+    # The summary_str will retain this original, potentially broader, file count.
     if node.type == FileSystemNodeType.DIRECTORY:
-        summary += f"Files analyzed: {node.file_count}\n"
+        summary += f"Files analyzed: {node.file_count}\n" # This is pre-filtering count
     elif node.type == FileSystemNodeType.FILE:
         summary += f"File: {node.path_str}\n"
         try:
-            node_content = node.content
-            summary += f"Lines: {len(node_content.splitlines()):,}\n"
+            node_content_for_summary = node.content # Access content for line count
+            summary += f"Lines: {len(node_content_for_summary.splitlines()):,}\n"
         except (ValueError, AttributeError):
              summary += "Lines: N/A\n"
 
-    # --- Pass the effective repository root path for relative path calculation ---
-    # If it's a zip, the root is the extracted path. If local, it's the original local_path.
-    # If remote, it's the base clone path *before* subpath application.
-    # query.local_path *should* represent this base path.
     repo_root_path_for_links = query.local_path
+    # tree_data now potentially has file_content embedded, and symlinks are filtered out
     tree_data: List[TreeDataItem] = _create_tree_data(node, repo_root_path=repo_root_path_for_links, parent_prefix="")
-    # --- END CHANGE ---
 
+    # Create directory_structure_text_str from the (filtered) tree_data
+    dir_struct_lines = []
+    for item in tree_data:
+        dir_struct_lines.append(f"{item['prefix']}{item['name']}")
+    directory_structure_text_str = "\n".join(dir_struct_lines)
 
-    content = _gather_file_contents(node)
+    # Calculate num_files_in_tree from the generated (and filtered) tree_data
+    num_files_in_tree = sum(1 for item in tree_data if item['type'] == FileSystemNodeType.FILE.name)
 
-    # (Token estimation remains the same)
-    tree_paths_for_token = "\n".join([ item['full_relative_path'] for item in tree_data if item.get('type') != 'DIRECTORY' and item['depth'] > 0 ]) # Use full path for tokens
-    text_for_token_estimation = content if is_single_file else (tree_paths_for_token + content)
-    token_estimate = _format_token_count(text_for_token_estimation)
-    if token_estimate: summary += f"\nEstimated tokens: {token_estimate}"
+    # Concatenated content for token estimation and TXT output
+    concatenated_content_str = _gather_file_contents(node) # Gathers content from non-symlink files
 
-    return summary, tree_data, content
+    # Token estimation based on concatenated content (as before for summary)
+    # Note: text_for_token_estimation used tree_paths_for_token before, which is not directly available here.
+    # For simplicity, using concatenated_content_str for token estimation.
+    # If tree_paths were crucial, _create_tree_data would need to return them or they'd be rebuilt.
+    # The CLI version used `tree_paths_for_token + content` if not single file.
+    # Here, `concatenated_content_str` should be roughly equivalent to `content` from old model.
+    # For directory, _gather_file_contents recursively gets all file content.
+    # For single file, it's just that file's content.
+    # This should be fine for token estimation for the summary.
+    token_estimate_str = _format_token_count(concatenated_content_str)
+    if token_estimate_str:
+        summary += f"\nEstimated tokens: {token_estimate_str}" # Append to summary string
 
+    # Parse token estimate for structured data
+    parsed_num_tokens = _parse_token_estimate_str_to_int(token_estimate_str)
 
-# (_create_summary_prefix remains the same)
+    return {
+        "summary_str": summary,
+        "tree_data_with_embedded_content": tree_data,
+        "directory_structure_text_str": directory_structure_text_str,
+        "num_tokens": parsed_num_tokens,
+        "num_files": num_files_in_tree,
+        "concatenated_content_for_txt": concatenated_content_str
+    }
+
+# _create_summary_prefix (remains the same)
 def _create_summary_prefix(query: IngestionQuery, single_file: bool = False) -> str:
     parts = []; # ... (implementation remains) ...
     if query.user_name and query.repo_name: parts.append(f"Repository: {query.user_name}/{query.repo_name}")
@@ -81,21 +131,27 @@ def _create_tree_data(
 ) -> List[TreeDataItem]:
     """
     Recursively generate structured data representing the file tree.
-    Includes the correctly formatted prefix string and full relative path.
+    Includes the correctly formatted prefix string, full relative path, and embedded file content.
+    Symlinks are excluded.
     """
+    if node.type == FileSystemNodeType.SYMLINK:
+        return [] # Do not include symlinks in the tree
+
     tree_list: List[TreeDataItem] = []
     prefix = parent_prefix + ("└── " if is_last_sibling else "├── ") if depth > 0 else parent_prefix
 
-    # --- Construct Display Name (remains the same) ---
-    display_name = node.name; node_type_str = node.type.name; link_target = ""; is_root_node = depth == 0
+    # --- Construct Display Name ---
+    display_name = node.name
+    node_type_str = node.type.name # e.g. "FILE", "DIRECTORY"
+    link_target = "" # Will remain empty for non-symlinks as symlinks are filtered out
+    is_root_node = depth == 0
     if node.type == FileSystemNodeType.DIRECTORY:
         if not is_root_node or node.name != '.': display_name += "/"
         elif is_root_node and node.name == '.': display_name = node.path.name + "/"
-    elif node.type == FileSystemNodeType.SYMLINK:
+    elif node.type == FileSystemNodeType.SYMLINK: # This block should not be reached due to early filter
         try: link_target = node.path.readlink().as_posix(); display_name += f" -> {link_target}"
         except OSError: display_name += " -> [Broken Link]"; link_target = "[Broken Link]"
     if is_root_node and node.name == '.': display_name = node.path.name + ("/" if node.type == FileSystemNodeType.DIRECTORY else "")
-
 
     # --- Calculate FULL Relative Path from Repo Root ---
     try:
@@ -111,16 +167,20 @@ def _create_tree_data(
         full_relative_path = node.path_str.replace(os.sep, '/') # Fallback
 
     # --- Add Node to List ---
-    tree_list.append({
+    item_data: TreeDataItem = { # Explicitly type item_data
         "name": display_name,
         "type": node_type_str,
-        "path_str": node.path_str.replace(os.sep, '/'), # Keep original path_str if needed elsewhere
-        "full_relative_path": full_relative_path, # Store the full path for links
+        "path_str": node.path_str.replace(os.sep, '/'),
+        "full_relative_path": full_relative_path,
         "depth": depth,
-        "link_target": link_target,
+        "link_target": link_target, # Will be empty as symlinks are filtered
         "prefix": prefix,
         "is_last": is_last_sibling,
-    })
+    }
+    if node.type == FileSystemNodeType.FILE:
+        item_data["file_content"] = node.content # node.content is a property
+
+    tree_list.append(item_data)
 
     # --- Recurse into Children ---
     if node.type == FileSystemNodeType.DIRECTORY and node.children:
@@ -140,6 +200,7 @@ def _format_token_count(text: str) -> Optional[str]:
     # ... (implementation) ...
     try: encoding = tiktoken.get_encoding("cl100k_base"); total_tokens = len(encoding.encode(text, disallowed_special=()))
     except Exception: return None # Simplified error handling
+    if not total_tokens: return "0" # Handle case where total_tokens might be 0
     if total_tokens >= 1_000_000: return f"{total_tokens / 1_000_000:.1f}M"
     if total_tokens >= 1_000: return f"{total_tokens / 1_000:.1f}k"
     return str(total_tokens)

@@ -108,13 +108,42 @@ def test_cli_json_output():
                 pytest.fail(f"Failed to decode JSON output: {e}\nContent:\n{content_str}")
 
         assert "summary" in data
+        assert "metadata" in data
         assert "tree" in data
-        assert "content" in data
         assert "query" in data
+        assert "content" not in data # Verify top-level 'content' is removed
+
+        # Metadata checks
+        metadata = data["metadata"]
+        assert "repository_url" in metadata # Will be None for local paths
+        assert metadata.get("repository_url") is None # Explicitly check for None for local path
+        assert "branch" in metadata
+        assert metadata.get("branch") is None # Explicitly check for None as not a git repo
+        assert "commit" in metadata
+        assert metadata.get("commit") is None # Explicitly check for None
+        assert "number_of_tokens" in metadata and isinstance(metadata["number_of_tokens"], int) and metadata["number_of_tokens"] >= 0
+        assert "number_of_files" in metadata and metadata["number_of_files"] == 1
+        assert "directory_structure_text" in metadata and isinstance(metadata["directory_structure_text"], str)
+        assert source_dir.name in metadata["directory_structure_text"] # e.g. "test_repo"
+        assert "sample.py" in metadata["directory_structure_text"]
+
+        # Tree checks
         assert isinstance(data["tree"], list)
-        assert "print('hello')" in data["content"]
-        # Ensure source path in query object is correctly recorded
-        assert data["query"]["local_path"] == str(source_dir) # Changed "source" to "local_path"
+        # The tree will contain the root directory node and the file node.
+        # Example: source_dir = "test_repo", file is "sample.py"
+        # Tree might be: [{name: "test_repo/", ...}, {name: "sample.py", ...}] or just [{name: "sample.py", ...}] if root is implicit
+        # Given current _create_tree_data, root directory IS included.
+        assert len(data["tree"]) >= 1 # Contains at least the root dir node, or file if root is a file
+
+        sample_py_node = next((item for item in data["tree"] if item["name"] == "sample.py"), None)
+        assert sample_py_node is not None, "sample.py node not found in tree"
+        assert sample_py_node["type"] == "FILE"
+        assert "file_content" in sample_py_node
+        assert sample_py_node["file_content"] == "print('hello')"
+        assert sample_py_node["full_relative_path"] == "sample.py"
+
+        # Query checks
+        assert data["query"]["local_path"] == str(source_dir)
         # assert data["query"]["output_format"] == "json" # output_format is not in IngestionQuery schema
 
         # Check console output
@@ -160,6 +189,33 @@ def test_cli_json_default_output_filename():
                 data = json.loads(f.read())
             except json.JSONDecodeError:
                 pytest.fail("Failed to decode JSON from default output file.")
-        assert "summary" in data # Basic check for content
-        assert data["query"]["local_path"] == str(source_dir) # Changed "source" to "local_path"
+
+        assert "summary" in data
+        assert "metadata" in data
+        assert "tree" in data
+        assert "query" in data
+        assert "content" not in data
+
+        # Metadata checks
+        metadata = data["metadata"]
+        assert "repository_url" in metadata
+        assert metadata.get("repository_url") is None
+        assert "number_of_tokens" in metadata and isinstance(metadata["number_of_tokens"], int) and metadata["number_of_tokens"] >= 0
+        assert "number_of_files" in metadata and metadata["number_of_files"] == 1
+        assert "directory_structure_text" in metadata and isinstance(metadata["directory_structure_text"], str)
+        assert source_dir_name in metadata["directory_structure_text"] # e.g. "my_project"
+        assert "main.rs" in metadata["directory_structure_text"]
+
+        # Tree checks
+        assert isinstance(data["tree"], list)
+        assert len(data["tree"]) >= 1
+        main_rs_node = next((item for item in data["tree"] if item["name"] == "main.rs"), None)
+        assert main_rs_node is not None, "main.rs node not found in tree"
+        assert main_rs_node["type"] == "FILE"
+        assert "file_content" in main_rs_node
+        assert main_rs_node["file_content"] == "fn main() {}"
+        assert main_rs_node["full_relative_path"] == "main.rs"
+
+        # Query checks
+        assert data["query"]["local_path"] == str(source_dir)
         # assert data["query"]["output_format"] == "json" # output_format is not in IngestionQuery schema

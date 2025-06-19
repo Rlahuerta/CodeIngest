@@ -3,6 +3,7 @@ from unittest.mock import MagicMock, AsyncMock, patch
 from pathlib import Path
 import zipfile # For BadZipFile
 import io # For BytesIO in upcoming tests if needed
+import json # Added import
 
 from fastapi import Request, UploadFile
 from fastapi.responses import HTMLResponse
@@ -110,9 +111,27 @@ async def test_process_query_success_url_path(mock_ingest_async, mock_open, mock
     mock_query_obj.branch = "main"
     mock_query_obj.commit = None
     mock_summary = "Summary: URL Ingestion successful."
-    mock_tree_data = [{"id": "1", "name": "file.py", "type": "file", "prefix": "", "children": [], "path_str": "file.py"}]
-    mock_content_str = "File content for success."
-    mock_ingest_async.return_value = (mock_summary, mock_tree_data, mock_content_str, mock_query_obj)
+    # mock_tree_data is used for the old assertion, will be replaced by mock_tree_data_with_content
+    mock_content_str = "File content for success." # This is concatenated_content
+
+    # New mock values for the dictionary structure
+    mock_file_content = "File content for success." # This is the individual file's content
+    mock_tree_data_with_content = [{"id": "1", "name": "file.py", "type": "FILE", "prefix": "", "path_str": "file.py", "file_content": mock_file_content}]
+    mock_dir_structure_text = "file.py" # Simplified for this mock, based on mock_tree_data_with_content
+    mock_num_tokens = 5
+    mock_num_files = 1
+
+    mock_ingestion_result = {
+        "summary_str": mock_summary,
+        "tree_data": mock_tree_data_with_content, # Use the one with embedded content for context
+        "directory_structure_text": mock_dir_structure_text,
+        "num_tokens": mock_num_tokens,
+        "num_files": mock_num_files,
+        "concatenated_content": mock_content_str,
+        "query_obj": mock_query_obj
+    }
+    mock_ingest_async.return_value = mock_ingestion_result
+
     mock_file_handle = MagicMock()
     mock_open.return_value.__enter__.return_value = mock_file_handle
 
@@ -132,9 +151,9 @@ async def test_process_query_success_url_path(mock_ingest_async, mock_open, mock
     assert response.template.name == "index.jinja"
     context = response.context
     assert context["result"] is True
-    assert context["summary"] == mock_summary
-    assert context["tree_data"] == mock_tree_data
-    assert context["content"].startswith(mock_content_str[:100])
+    assert context["summary"] == mock_summary # Check against mock_summary from ingestion_result
+    assert context["tree_data"] == mock_tree_data_with_content # Check against new tree data from ingestion_result
+    assert context["content"].startswith(mock_content_str[:100]) # Check UI content against concatenated_content
     assert context["ingest_id"] == mock_query_id
     assert context["encoded_download_filename"] is not None
     assert mock_repo_slug in context["encoded_download_filename"]
@@ -145,16 +164,8 @@ async def test_process_query_success_url_path(mock_ingest_async, mock_open, mock
     # Default download_format is 'txt', so digest.txt is expected
     mock_open.assert_called_once_with(expected_digest_dir / "digest.txt", "w", encoding="utf-8")
 
-    # Construct the expected content string as it would be written by query_processor for TXT format
-    formatted_tree_lines = []
-    for item in mock_tree_data: # Replicate the loop from query_processor
-        formatted_tree_lines.append(f"{item.get('prefix', '')}{item.get('name', '')}")
-    formatted_tree = "\n".join(formatted_tree_lines)
-
-    # The file content for TXT format (default) in query_processor is:
-    # f"Directory structure:\n{formatted_tree}\n\n{content_str}"
-    # The summary is NOT part of the file content, it's displayed on the page.
-    expected_file_content = f"Directory structure:\n{formatted_tree}\n\n{mock_content_str}"
+    # Construct the expected content string using values from mock_ingestion_result
+    expected_file_content = f"Directory structure:\n{mock_dir_structure_text}\n\n{mock_content_str}"
     mock_file_handle.write.assert_called_once_with(expected_file_content)
 
     mock_ingest_async.assert_called_once()
@@ -171,10 +182,15 @@ async def test_process_query_success_url_path(mock_ingest_async, mock_open, mock
 async def test_process_query_success_url_path_include_pattern(mock_ingest_async, mock_open, mock_makedirs):
     req = mock_request()
     mock_query_obj = MagicMock(spec=IngestionQuery, id="test-id-include", slug="include-repo", url="http://example.com/include", branch="dev", commit=None)
-    mock_query_obj.repo_name = "include-repo"
-    mock_query_obj.user_name = "testuser"
-    mock_ingest_async.return_value = ("Summary", [], "", mock_query_obj)
-    mock_open.return_value.__enter__.return_value = MagicMock()
+    # mock_query_obj.repo_name = "include-repo" # Not strictly needed for this test's assertions
+    # mock_query_obj.user_name = "testuser"   # Not strictly needed for this test's assertions
+
+    minimal_mock_ingestion_result_include = {
+        "summary_str": "Include Summary", "tree_data": [], "directory_structure_text": "",
+        "num_tokens": 0, "num_files": 0, "concatenated_content": "", "query_obj": mock_query_obj
+    }
+    mock_ingest_async.return_value = minimal_mock_ingestion_result_include
+    mock_open.return_value.__enter__.return_value = MagicMock() # mock_open is for file writing, not directly asserted here
 
     await process_query(
         request=req,
@@ -197,7 +213,13 @@ async def test_process_query_success_url_path_include_pattern(mock_ingest_async,
 async def test_process_query_ingest_async_returns_no_query_id(mock_ingest_async):
     req = mock_request()
     mock_query_obj_no_id = MagicMock(spec=IngestionQuery, id=None, slug="no-id-repo", url="http://example.com/no-id", branch="main")
-    mock_ingest_async.return_value = ("Summary", [], "", mock_query_obj_no_id)
+
+    mock_ingestion_result_no_id = {
+        "summary_str": "Summary No ID", "tree_data": [], "directory_structure_text": "",
+        "num_tokens": 0, "num_files": 0, "concatenated_content": "", "query_obj": mock_query_obj_no_id
+    }
+    mock_ingest_async.return_value = mock_ingestion_result_no_id
+
     response_no_id = await process_query(
         request=req, source_type="url_path", input_text="http://example.com/no-id",
         zip_file=None,
@@ -210,8 +232,15 @@ async def test_process_query_ingest_async_returns_no_query_id(mock_ingest_async)
     assert response_no_id.status_code == 200
     assert isinstance(response_no_id, TemplateResponse)
     assert "Ingestion ID missing" in response_no_id.context["error_message"]
-    mock_ingest_async.reset_mock()
-    mock_ingest_async.return_value = ("Summary", [], "", None)
+
+    mock_ingest_async.reset_mock() # Reset for the next scenario in the same test
+
+    mock_ingestion_result_none_obj = {
+        "summary_str": "Summary None Obj", "tree_data": [], "directory_structure_text": "",
+        "num_tokens": 0, "num_files": 0, "concatenated_content": "", "query_obj": None
+    }
+    mock_ingest_async.return_value = mock_ingestion_result_none_obj
+
     response_none_obj = await process_query(
         request=req, source_type="url_path", input_text="http://example.com/none-obj",
         zip_file=None,
@@ -248,8 +277,18 @@ async def test_process_query_invalid_pattern_type_direct_call():
 async def test_process_query_success_local_path_is_local_true(mock_ingest_async, mock_open, mock_makedirs):
     req = mock_request()
     mock_query_obj = MagicMock(spec=IngestionQuery, id="local-id", slug="local-folder", url=None, branch=None, commit=None)
-    mock_ingest_async.return_value = ("Summary local", [{"id":"f1","name":"file.local","type":"file","prefix":"","children":[],"path_str":"file.local"}], "Local content", mock_query_obj)
-    mock_open.return_value.__enter__.return_value = MagicMock()
+
+    mock_ingestion_result_local = {
+        "summary_str": "Summary local",
+        "tree_data": [{"id":"f1","name":"file.local","type":"FILE","prefix":"","path_str":"file.local", "file_content": "Local content"}],
+        "directory_structure_text": "file.local",
+        "num_tokens": 3,
+        "num_files": 1,
+        "concatenated_content": "Local content",
+        "query_obj": mock_query_obj
+    }
+    mock_ingest_async.return_value = mock_ingestion_result_local
+    mock_open.return_value.__enter__.return_value = MagicMock() # Mock for file writing
 
     response = await process_query(
         request=req,
@@ -336,8 +375,19 @@ async def test_process_query_handles_generic_exception_from_ingest(mock_ingest_a
 async def test_process_query_digest_write_os_error(mock_ingest_async, mock_open, mock_makedirs):
     req = mock_request()
     mock_query_obj = MagicMock(spec=IngestionQuery, id="os-error-id", slug="os-error-repo", url="http://example.com/os-error", branch="main", commit=None)
-    mock_ingest_async.return_value = ("Summary", [{"id":"f","name":"f.py","type":"file","prefix":"","children":[],"path_str":"f.py"}], "Content", mock_query_obj)
-    mock_open.side_effect = OSError("Disk is full or something")
+
+    mock_ingestion_result_os_error = {
+        "summary_str": "Summary OS Error",
+        "tree_data": [{"id":"f","name":"f.py","type":"FILE","prefix":"","path_str":"f.py", "file_content":"Content"}],
+        "directory_structure_text": "f.py",
+        "num_tokens": 1,
+        "num_files": 1,
+        "concatenated_content": "Content",
+        "query_obj": mock_query_obj
+    }
+    mock_ingest_async.return_value = mock_ingestion_result_os_error
+    mock_open.side_effect = OSError("Disk is full or something") # Simulate error during file write
+
     response = await process_query(
         request=req, source_type="url_path", input_text="http://example.com/os-error",
         zip_file=None, # Added for consistency
@@ -361,8 +411,14 @@ async def test_process_query_filename_gen_with_commit_hash(mock_ingest_async, mo
     req = mock_request()
     commit_hash = "abcdef1234567890"
     mock_query_obj = MagicMock(spec=IngestionQuery, id="commit-id", slug="commit-repo", url="http://example.com/commit-repo", branch=None, commit=commit_hash)
-    mock_ingest_async.return_value = ("Summary", [], "", mock_query_obj)
-    mock_open.return_value.__enter__.return_value = MagicMock()
+
+    mock_ingestion_result_commit = {
+        "summary_str": "Summary Commit Hash", "tree_data": [], "directory_structure_text": "",
+        "num_tokens": 0, "num_files": 0, "concatenated_content": "", "query_obj": mock_query_obj
+    }
+    mock_ingest_async.return_value = mock_ingestion_result_commit
+    mock_open.return_value.__enter__.return_value = MagicMock() # Mock for file writing
+
     response = await process_query(
         request=req,
         source_type="url_path",
@@ -382,6 +438,94 @@ async def test_process_query_filename_gen_with_commit_hash(mock_ingest_async, mo
     assert "commit-repo_" + commit_hash[:7] + ".txt" in response.context.get("encoded_download_filename")
 
 # TODO: More tests:
-# - Digest file saving error when tree_data is empty
-# - Successful ZIP file processing (covering actual file save and passing path to process_query)
-# - Test specific MAX_DISPLAY_SIZE cropping for content.
+# - Digest file saving error when tree_data is empty (partially covered by os_error test if content is empty)
+# - Successful ZIP file processing (covering actual file save and passing path to process_query) - needs separate test
+# - Test specific MAX_DISPLAY_SIZE cropping for content (covered by success_url_path and success_json_download via context["content"])
+
+@pytest.mark.asyncio
+@patch("src.server.query_processor.os.makedirs")
+@patch("src.server.query_processor.open", new_callable=MagicMock)
+@patch("src.server.query_processor.ingest_async", new_callable=AsyncMock)
+async def test_process_query_success_json_download(mock_ingest_async, mock_open, mock_makedirs):
+    req = mock_request()
+    mock_query_id = "test-json-id"
+    mock_repo_slug = "json-repo"
+    mock_repo_url = "https://github.com/testowner/json-repo"
+
+    mock_query_obj = MagicMock(spec=IngestionQuery)
+    mock_query_obj.id = mock_query_id
+    mock_query_obj.slug = mock_repo_slug
+    mock_query_obj.url = mock_repo_url
+    mock_query_obj.branch = "main"
+    mock_query_obj.commit = "abc123xyz" # Example commit
+    # Mock model_dump for query_obj
+    mock_query_obj.model_dump.return_value = {"url": mock_repo_url, "branch": "main", "commit": "abc123xyz", "local_path": "/tmp/clone/path"}
+
+
+    mock_summary_str = "JSON Summary"
+    mock_file_content = "print('hello json')"
+    # Note: tree_data in ingestion_result is tree_data_with_embedded_content
+    mock_tree_data_val = [{"name": "file.py", "type": "FILE", "prefix": "", "path_str": "file.py", "file_content": mock_file_content}]
+    mock_dir_text_val = "file.py" # This is directory_structure_text
+    mock_tokens_val = 10
+    mock_files_val = 1
+    mock_concat_content_val = mock_file_content # This is concatenated_content
+
+    mock_ingestion_result = {
+        "summary_str": mock_summary_str,
+        "tree_data": mock_tree_data_val, # This corresponds to tree_data_with_embedded_content
+        "directory_structure_text": mock_dir_text_val,
+        "num_tokens": mock_tokens_val,
+        "num_files": mock_files_val,
+        "concatenated_content": mock_concat_content_val,
+        "query_obj": mock_query_obj
+    }
+    mock_ingest_async.return_value = mock_ingestion_result
+
+    mock_file_handle = MagicMock()
+    mock_open.return_value.__enter__.return_value = mock_file_handle
+
+    response = await process_query(
+        request=req,
+        source_type="url_path",
+        input_text=mock_repo_url,
+        zip_file=None,
+        slider_position=243,
+        branch_or_tag="main",
+        download_format="json", # Specify JSON download
+        is_index=True
+    )
+
+    assert response.status_code == 200
+    context = response.context
+    assert context["result"] is True
+    assert context["summary"] == mock_summary_str
+    assert context["tree_data"] == mock_tree_data_val # This is tree_data_with_embedded_content
+    assert context["encoded_download_filename"].endswith(".json")
+
+    expected_digest_dir = TMP_BASE_PATH / mock_query_id
+    mock_makedirs.assert_called_once_with(expected_digest_dir, exist_ok=True)
+    mock_open.assert_called_once_with(expected_digest_dir / "digest.json", "w", encoding="utf-8")
+
+    # Expected JSON structure for the saved file
+    expected_metadata_obj = {
+        "repository_url": mock_repo_url,
+        "branch": "main",
+        "commit": "abc123xyz",
+        "number_of_tokens": mock_tokens_val,
+        "number_of_files": mock_files_val,
+        "directory_structure_text": mock_dir_text_val
+    }
+    expected_data_to_save = {
+        "summary": mock_summary_str,
+        "metadata": expected_metadata_obj,
+        "tree": mock_tree_data_val, # This is tree_data_with_embedded_content from output_formatters
+        "query": mock_query_obj.model_dump(mode='json')
+    }
+
+    # Capture what was written to file
+    written_content_str = mock_file_handle.write.call_args[0][0]
+    written_data = json.loads(written_content_str)
+
+    assert written_data == expected_data_to_save
+    mock_query_obj.model_dump.assert_called_once_with(mode='json')
