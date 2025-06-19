@@ -2,6 +2,7 @@
 """Process a query by parsing input, cloning a repository, and generating a summary."""
 
 import os
+import json # Added import
 import re
 from functools import partial
 from pathlib import Path
@@ -50,10 +51,11 @@ async def process_query(
     pattern_type: str = "exclude",
     pattern: str = "",
     branch_or_tag: str = "",
+    download_format: str = "txt", # Added download_format
     is_index: bool = False,
 ) -> _TemplateResponse:
     """
-    Process a query (from URL/path or ZIP), generate summary, save digest, and prepare response.
+    Process a query (from URL/path or ZIP), generate summary, save digest (TXT or JSON), and prepare response.
     """
     source_for_ingest: Optional[str] = None
     effective_input_display = ""
@@ -122,7 +124,7 @@ async def process_query(
         "result": False, "error_message": None, "summary": None,
         "tree_data": None, "content": None, "ingest_id": None,
         "is_local_path": False, "encoded_download_filename": None,
-        "base_repo_url": None, "repo_ref": None,
+        "base_repo_url": None, "repo_ref": None, "download_format": download_format, # Added download_format to context
     }
     query_obj_from_ingest = None
 
@@ -149,15 +151,32 @@ async def process_query(
         ingest_id_for_download = query_obj_from_ingest.id
         temp_digest_dir = TMP_BASE_PATH / ingest_id_for_download
         os.makedirs(temp_digest_dir, exist_ok=True)
-        internal_filename = "digest.txt"
-        digest_path = temp_digest_dir / internal_filename
+
+        file_content_to_write = ""
+        actual_internal_filename = ""
+        if download_format == "json":
+            actual_internal_filename = "digest.json"
+            data_to_save = {
+                "summary": summary,
+                "tree": tree_data,
+                "content": content_str,
+                "query": query_obj_from_ingest.model_dump() if query_obj_from_ingest else None
+            }
+            file_content_to_write = json.dumps(data_to_save, indent=2)
+        else: # Default to txt
+            actual_internal_filename = "digest.txt"
+            formatted_tree_lines = []
+            for item in tree_data: # Ensure tree_data is available here
+                formatted_tree_lines.append(f"{item['prefix']}{item['name']}")
+            formatted_tree = "\n".join(formatted_tree_lines)
+            # For TXT, the summary is displayed on the page, so digest file contains structure + content
+            file_content_to_write = f"Directory structure:\n{formatted_tree}\n\n{content_str}"
+
+        digest_path = temp_digest_dir / actual_internal_filename
 
         try:
             with open(digest_path, "w", encoding="utf-8") as f:
-                 f.write("Directory structure:\n")
-                 for item in tree_data:
-                     f.write(f"{item['prefix']}{item['name']}\n")
-                 f.write("\n" + content_str)
+                f.write(file_content_to_write)
         except OSError as e:
             logger.error("Error writing digest file %s: %s", digest_path, e, exc_info=True)
             ingest_id_for_download = None # Invalidate if save failed
@@ -165,6 +184,7 @@ async def process_query(
 
 
         # Determine Download Filename
+        file_ext = ".json" if download_format == "json" else ".txt"
         filename_parts = []
         project_name_part = query_obj_from_ingest.slug # Slug from IngestionQuery (e.g., zip filename stem or repo name)
         sanitized_project_name = sanitize_filename_part(project_name_part)
@@ -180,7 +200,7 @@ async def process_query(
                 sanitized_commit = sanitize_filename_part(query_obj_from_ingest.commit[:7])
                 if sanitized_commit: filename_parts.append(sanitized_commit)
 
-        download_filename = "_".join(filename_parts) + ".txt"
+        download_filename = "_".join(filename_parts) + file_ext
         encoded_download_filename = quote(download_filename)
 
         # Prepare content for display (cropping if too large)
@@ -207,6 +227,7 @@ async def process_query(
             "encoded_download_filename": encoded_download_filename if ingest_id_for_download else None,
             "base_repo_url": query_obj_from_ingest.url if query_obj_from_ingest.url else None,
             "repo_ref": query_obj_from_ingest.branch or query_obj_from_ingest.commit or 'main',
+            # download_format is already added to context initialization
         })
         return templates.TemplateResponse(template, context=context)
 

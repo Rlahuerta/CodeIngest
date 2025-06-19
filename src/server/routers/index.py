@@ -28,6 +28,7 @@ async def index_post(
     pattern_type: str = Form(...),
     pattern: str = Form(""),
     branch_or_tag: str = Form(""),
+    download_format: str = Form("txt"), # Added download_format
 ) -> HTMLResponse:
 
     actual_input_for_process_query = input_text # Default for url_path
@@ -38,7 +39,7 @@ async def index_post(
             # process_query will then handle the error message generation.
             return await process_query(request=request, source_type=source_type, input_text=None, zip_file=None,
                                        slider_position=max_file_size, pattern_type=pattern_type, pattern=pattern,
-                                       branch_or_tag=branch_or_tag, is_index=True)
+                                       branch_or_tag=branch_or_tag, download_format=download_format, is_index=True)
 
         # --- Save uploaded ZIP to a temporary path ---
         temp_zip_filename = f"{uuid.uuid4()}_{zip_file.filename}"
@@ -56,19 +57,19 @@ async def index_post(
                                        input_text=f"Error saving uploaded ZIP: {e}", # Pass error as input_text
                                        zip_file=zip_file, # Pass original zip_file
                                        slider_position=max_file_size, pattern_type=pattern_type, pattern=pattern,
-                                       branch_or_tag=branch_or_tag, is_index=True)
+                                       branch_or_tag=branch_or_tag, download_format=download_format, is_index=True)
         finally:
             await zip_file.close()
     elif source_type == "url_path":
         if not input_text: # Ensure input_text is provided for url_path
              return await process_query(request=request, source_type=source_type, input_text=None, zip_file=None,
                                        slider_position=max_file_size, pattern_type=pattern_type, pattern=pattern,
-                                       branch_or_tag=branch_or_tag, is_index=True)
+                                       branch_or_tag=branch_or_tag, download_format=download_format, is_index=True)
         # actual_input_for_process_query is already set to input_text
     else: # Invalid source_type
         return await process_query(request=request, source_type=source_type, input_text="Invalid source type", zip_file=None,
                                    slider_position=max_file_size, pattern_type=pattern_type, pattern=pattern,
-                                   branch_or_tag=branch_or_tag, is_index=True)
+                                   branch_or_tag=branch_or_tag, download_format=download_format, is_index=True)
 
     # Now, actual_input_for_process_query contains either:
     # 1. The URL/local path from the form.
@@ -82,5 +83,6 @@ async def index_post(
         pattern_type=pattern_type,
         pattern=pattern,
         branch_or_tag=branch_or_tag,
+        download_format=download_format, # Pass download_format
         is_index=True,
     )
