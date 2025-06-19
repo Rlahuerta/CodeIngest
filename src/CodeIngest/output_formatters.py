@@ -103,8 +103,7 @@ def _create_tree_data(
         full_relative_path = node.path.relative_to(repo_root_path).as_posix()
          # Handle root case where relative path might be '.'
         if full_relative_path == '.':
-             full_relative_path = "" # Represent root as empty string for linking? Or use name? Let's use name.
-             full_relative_path = node.path.name # Use actual dir name for root link base if needed
+             full_relative_path = "" # Root of the repo, relative path is empty for URL construction
     except ValueError:
          # Should not happen if repo_root_path is correct, but fallback
          full_relative_path = node.path_str.replace(os.sep, '/')
