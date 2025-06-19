@@ -184,13 +184,18 @@ def _create_tree_data(
 
     # --- Recurse into Children ---
     if node.type == FileSystemNodeType.DIRECTORY and node.children:
-        num_children = len(node.children)
+        # Filter out symlinks before determining is_last_sibling for correct prefix
+        processed_children = [child for child in node.children if child.type != FileSystemNodeType.SYMLINK]
+        num_processed_children = len(processed_children)
+
         child_indent = parent_prefix + ("    " if is_last_sibling else "│   ") if depth >= 0 else "" # Always indent children
-        for i, child in enumerate(node.children):
-            is_last = (i == num_children - 1)
+        for i, child_node in enumerate(processed_children):
+            is_last = (i == num_processed_children - 1)
             # Pass repo_root_path down
+            # _create_tree_data itself will return [] for any symlinks if they somehow weren't pre-filtered,
+            # but pre-filtering here ensures correct is_last logic for siblings.
             tree_list.extend(_create_tree_data(
-                child, repo_root_path, depth + 1, is_last_sibling=is_last, parent_prefix=child_indent
+                child_node, repo_root_path, depth + 1, is_last_sibling=is_last, parent_prefix=child_indent
             ))
 
     return tree_list
