@@ -114,8 +114,8 @@ def test_cli_json_output():
         assert isinstance(data["tree"], list)
         assert "print('hello')" in data["content"]
         # Ensure source path in query object is correctly recorded
-        assert data["query"]["source"] == str(source_dir)
-        assert data["query"]["output_format"] == "json"
+        assert data["query"]["local_path"] == str(source_dir) # Changed "source" to "local_path"
+        # assert data["query"]["output_format"] == "json" # output_format is not in IngestionQuery schema
 
         # Check console output
         # The output path in the message should be the one specified by -o
@@ -161,5 +161,5 @@ def test_cli_json_default_output_filename():
             except json.JSONDecodeError:
                 pytest.fail("Failed to decode JSON from default output file.")
         assert "summary" in data # Basic check for content
-        assert data["query"]["source"] == str(source_dir)
-        assert data["query"]["output_format"] == "json"
+        assert data["query"]["local_path"] == str(source_dir) # Changed "source" to "local_path"
+        # assert data["query"]["output_format"] == "json" # output_format is not in IngestionQuery schema

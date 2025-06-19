@@ -142,10 +142,21 @@ async def test_process_query_success_url_path(mock_ingest_async, mock_open, mock
     assert context["repo_ref"] == "main"
     expected_digest_dir = TMP_BASE_PATH / mock_query_id
     mock_makedirs.assert_called_once_with(expected_digest_dir, exist_ok=True)
+    # Default download_format is 'txt', so digest.txt is expected
     mock_open.assert_called_once_with(expected_digest_dir / "digest.txt", "w", encoding="utf-8")
-    mock_file_handle.write.assert_any_call("Directory structure:\n")
-    mock_file_handle.write.assert_any_call(f"{mock_tree_data[0]['prefix']}{mock_tree_data[0]['name']}\n")
-    mock_file_handle.write.assert_any_call("\n" + mock_content_str)
+
+    # Construct the expected content string as it would be written by query_processor for TXT format
+    formatted_tree_lines = []
+    for item in mock_tree_data: # Replicate the loop from query_processor
+        formatted_tree_lines.append(f"{item.get('prefix', '')}{item.get('name', '')}")
+    formatted_tree = "\n".join(formatted_tree_lines)
+
+    # The file content for TXT format (default) in query_processor is:
+    # f"Directory structure:\n{formatted_tree}\n\n{content_str}"
+    # The summary is NOT part of the file content, it's displayed on the page.
+    expected_file_content = f"Directory structure:\n{formatted_tree}\n\n{mock_content_str}"
+    mock_file_handle.write.assert_called_once_with(expected_file_content)
+
     mock_ingest_async.assert_called_once()
     call_kwargs = mock_ingest_async.call_args.kwargs
     assert call_kwargs.get("source") == mock_repo_url

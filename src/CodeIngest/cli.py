@@ -115,7 +115,7 @@ async def _async_main(
                 "summary": summary,
                 "tree": tree_data, # tree_data is already a list of dicts
                 "content": content_str,
-                "query": query_obj.model_dump() if query_obj else None
+                "query": query_obj.model_dump(mode='json') if query_obj else None # Changed this line
             }
             payload_str = json.dumps(data_dict, indent=2)
         else: # txt format
