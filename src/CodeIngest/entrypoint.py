@@ -17,13 +17,12 @@ async def ingest_async(
     max_file_size: int = 10 * 1024 * 1024,  # 10 MB
     include_patterns: Optional[Union[str, Set[str]]] = None,
     exclude_patterns: Optional[Union[str, Set[str]]] = None,
-    branch: Optional[str] = None,
-    output: Optional[str] = None, # output parameter is no longer used by this function for writing
-) -> Dict[str, Any]: # Changed return type
+    branch: Optional[str] = None
+) -> Dict[str, Any]: # output parameter removed
     """
     Main entry point for ingesting a source and processing its contents.
     Returns a dictionary with structured data.
-    # ... (docstring remains the same)
+    The 'output' parameter was removed as this function no longer handles file writing directly.
     """
     repo_cloned = False
     query: Optional[IngestionQuery] = None
@@ -70,13 +69,12 @@ def ingest(
     max_file_size: int = 10 * 1024 * 1024,  # 10 MB
     include_patterns: Optional[Union[str, Set[str]]] = None,
     exclude_patterns: Optional[Union[str, Set[str]]] = None,
-    branch: Optional[str] = None,
-    output: Optional[str] = None, # output parameter is no longer used by ingest_async for writing
-) -> Dict[str, Any]: # Changed return type
+    branch: Optional[str] = None
+) -> Dict[str, Any]: # output parameter removed
     """
     Synchronous version of ingest_async.
     Returns a dictionary with structured data.
-    # ... (docstring remains the same)
+    The 'output' parameter was removed as this function no longer handles file writing directly.
     """
     # (Implementation remains the same)
     try: loop = asyncio.get_running_loop()
@@ -85,4 +83,4 @@ def ingest(
                                                   max_file_size=max_file_size,
                                                   include_patterns=include_patterns,
                                                   exclude_patterns=exclude_patterns,
-                                                  branch=branch, output=output, ) )
+                                                  branch=branch ) ) # output argument removed from call
