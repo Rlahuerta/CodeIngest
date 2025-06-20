@@ -2,6 +2,7 @@
 """Process a query by parsing input, cloning a repository, and generating a summary."""
 
 import os
+import json # Added import
 import re
 from functools import partial
 from pathlib import Path
@@ -50,10 +51,11 @@ async def process_query(
     pattern_type: str = "exclude",
     pattern: str = "",
     branch_or_tag: str = "",
+    download_format: str = "txt", # Added download_format
     is_index: bool = False,
 ) -> _TemplateResponse:
     """
-    Process a query (from URL/path or ZIP), generate summary, save digest, and prepare response.
+    Process a query (from URL/path or ZIP), generate summary, save digest (TXT or JSON), and prepare response.
     """
     source_for_ingest: Optional[str] = None
     effective_input_display = ""
@@ -122,20 +124,20 @@ async def process_query(
         "result": False, "error_message": None, "summary": None,
         "tree_data": None, "content": None, "ingest_id": None,
         "is_local_path": False, "encoded_download_filename": None,
-        "base_repo_url": None, "repo_ref": None,
+        "base_repo_url": None, "repo_ref": None, "download_format": download_format, # Added download_format to context
     }
     query_obj_from_ingest = None
 
     try:
-        # Call the core ingest function
-        summary, tree_data, content_str, query_obj_from_ingest = await ingest_async(
-            source=source_for_ingest, # This is now the correct full path to URL, local dir, or saved ZIP
+        # Call the core ingest function, which now returns a dictionary
+        ingestion_result = await ingest_async(
+            source=source_for_ingest,
             max_file_size=max_file_size,
             include_patterns=include_patterns,
             exclude_patterns=exclude_patterns,
-            branch=branch_or_tag if source_type == 'url_path' and branch_or_tag else None,
-            output=None
+            branch=branch_or_tag if source_type == 'url_path' and branch_or_tag else None
         )
+        query_obj_from_ingest = ingestion_result["query_obj"] # Extract for convenience
 
         if not query_obj_from_ingest or not query_obj_from_ingest.id:
             logger.error(
@@ -149,15 +151,37 @@ async def process_query(
         ingest_id_for_download = query_obj_from_ingest.id
         temp_digest_dir = TMP_BASE_PATH / ingest_id_for_download
         os.makedirs(temp_digest_dir, exist_ok=True)
-        internal_filename = "digest.txt"
-        digest_path = temp_digest_dir / internal_filename
+
+        file_content_to_write = ""
+        actual_internal_filename = ""
+        if download_format == "json":
+            actual_internal_filename = "digest.json"
+            # Construct data_to_save using fields from ingestion_result and the new JSON structure
+            metadata_obj = {
+                "repository_url": query_obj_from_ingest.url if query_obj_from_ingest else None,
+                "branch": query_obj_from_ingest.branch if query_obj_from_ingest else None,
+                "commit": query_obj_from_ingest.commit if query_obj_from_ingest else None,
+                "number_of_tokens": ingestion_result["num_tokens"],
+                "number_of_files": ingestion_result["num_files"],
+                "directory_structure_text": ingestion_result["directory_structure_text"]
+            }
+            data_to_save = {
+                "summary": ingestion_result["summary_str"],
+                "metadata": metadata_obj,
+                "tree": ingestion_result["tree_data"], # This is tree_data_with_embedded_content
+                "query": query_obj_from_ingest.model_dump(mode='json') if query_obj_from_ingest else None
+            }
+            file_content_to_write = json.dumps(data_to_save, indent=2)
+        else: # Default to txt
+            actual_internal_filename = "digest.txt"
+            # Use directory_structure_text and concatenated_content from ingestion_result
+            file_content_to_write = f"Directory structure:\n{ingestion_result['directory_structure_text']}\n\n{ingestion_result['concatenated_content']}"
+
+        digest_path = temp_digest_dir / actual_internal_filename
 
         try:
             with open(digest_path, "w", encoding="utf-8") as f:
-                 f.write("Directory structure:\n")
-                 for item in tree_data:
-                     f.write(f"{item['prefix']}{item['name']}\n")
-                 f.write("\n" + content_str)
+                f.write(file_content_to_write)
         except OSError as e:
             logger.error("Error writing digest file %s: %s", digest_path, e, exc_info=True)
             ingest_id_for_download = None # Invalidate if save failed
@@ -165,6 +189,7 @@ async def process_query(
 
 
         # Determine Download Filename
+        file_ext = ".json" if download_format == "json" else ".txt"
         filename_parts = []
         project_name_part = query_obj_from_ingest.slug # Slug from IngestionQuery (e.g., zip filename stem or repo name)
         sanitized_project_name = sanitize_filename_part(project_name_part)
@@ -180,16 +205,17 @@ async def process_query(
                 sanitized_commit = sanitize_filename_part(query_obj_from_ingest.commit[:7])
                 if sanitized_commit: filename_parts.append(sanitized_commit)
 
-        download_filename = "_".join(filename_parts) + ".txt"
+        download_filename = "_".join(filename_parts) + file_ext
         encoded_download_filename = quote(download_filename)
 
         # Prepare content for display (cropping if too large)
-        content_to_display = content_str[:MAX_DISPLAY_SIZE] + ("\n(Files content cropped to first characters...)" if len(content_str) > MAX_DISPLAY_SIZE else "")
+        concatenated_content_for_ui = ingestion_result["concatenated_content"]
+        content_to_display = concatenated_content_for_ui[:MAX_DISPLAY_SIZE] + ("\n(Files content cropped to first characters...)" if len(concatenated_content_for_ui) > MAX_DISPLAY_SIZE else "")
 
         # Prepare a concise summary for logging
         summary_for_log = "N/A"
         try:
-            token_line = next((line for line in summary.splitlines() if "Estimated tokens:" in line), None)
+            token_line = next((line for line in ingestion_result["summary_str"].splitlines() if "Estimated tokens:" in line), None)
             if token_line:
                 summary_for_log = token_line.strip()
         except Exception:
@@ -201,12 +227,16 @@ async def process_query(
         )
 
         context.update({
-            "result": True, "summary": summary, "tree_data": tree_data,
-            "content": content_to_display, "ingest_id": ingest_id_for_download,
+            "result": True,
+            "summary": ingestion_result["summary_str"],
+            "tree_data": ingestion_result["tree_data"],
+            "content": content_to_display,
+            "ingest_id": ingest_id_for_download,
             "is_local_path": not query_obj_from_ingest.url and source_type != 'zip_file', # True if local dir/file
             "encoded_download_filename": encoded_download_filename if ingest_id_for_download else None,
             "base_repo_url": query_obj_from_ingest.url if query_obj_from_ingest.url else None,
             "repo_ref": query_obj_from_ingest.branch or query_obj_from_ingest.commit or 'main',
+            # download_format is already added to context initialization
         })
         return templates.TemplateResponse(template, context=context)
 

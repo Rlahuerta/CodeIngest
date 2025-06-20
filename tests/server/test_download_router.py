@@ -1,8 +1,9 @@
 import shutil
 import uuid
+import json # Added import
 from pathlib import Path
 
-from fastapi import FastAPI # Added
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 # from src.server.main import app # Using isolated app
@@ -45,9 +46,10 @@ def test_download_digest_success():
 
 def test_download_digest_not_found():
     non_existent_digest_id = str(uuid.uuid4())
-    response = client.get(f"/download/{non_existent_digest_id}")
+    # Requesting a .txt file by not specifying filename, or by specifying a .txt filename
+    response = client.get(f"/download/{non_existent_digest_id}?filename=anyfile.txt")
     assert response.status_code == 404
-    assert response.json() == {"detail": "Digest file not found."} # FastAPI default error structure
+    assert response.json() == {"detail": f"Digest file digest.txt not found for ID {non_existent_digest_id}."}
 
 def test_download_digest_success_with_custom_filename():
     test_digest_id = str(uuid.uuid4())
@@ -94,14 +96,49 @@ def test_download_digest_file_missing_in_dir():
     digest_dir.mkdir(parents=True, exist_ok=True) # Directory exists, file does not
 
     try:
-        response = client.get(f"/download/{test_digest_id}")
+        # Requesting a .txt file by not specifying filename, or by specifying a .txt filename
+        response = client.get(f"/download/{test_digest_id}?filename=some_file.txt")
         assert response.status_code == 404
-        assert response.json() == {"detail": "Digest file not found."}
+        assert response.json() == {"detail": f"Digest file digest.txt not found for ID {test_digest_id}."}
     finally:
         if digest_dir.exists():
             shutil.rmtree(digest_dir)
 
-# TODO: Add more tests later:
-# - with filename query parameter (covered partially by success_with_custom_filename)
-# - with invalid filename query parameter (covered)
-# - digest directory exists, but digest.txt missing (covered by file_missing_in_dir)
+def test_download_json_digest_success():
+    test_digest_id = str(uuid.uuid4())
+    test_data = {"key": "value", "message": "hello json"}
+    test_digest_content = json.dumps(test_data, indent=2)
+
+    digest_dir = TMP_BASE_PATH / test_digest_id
+    digest_dir.mkdir(parents=True, exist_ok=True)
+    digest_file = digest_dir / "digest.json" # Save as digest.json
+    with open(digest_file, "w") as f:
+        f.write(test_digest_content)
+
+    requested_filename = "my_output.json"
+    try:
+        response = client.get(f"/download/{test_digest_id}?filename={requested_filename}")
+
+        assert response.status_code == 200
+        # Content-Type for application/json might not include charset by default with FileResponse
+        assert response.headers["content-type"] == "application/json"
+        assert "attachment" in response.headers["content-disposition"]
+        assert f'filename="{requested_filename}"' in response.headers["content-disposition"]
+        assert response.json() == test_data # Compare parsed JSON
+    finally:
+        if digest_dir.exists():
+            shutil.rmtree(digest_dir)
+
+def test_download_json_digest_file_missing_in_dir():
+    test_digest_id = str(uuid.uuid4())
+    digest_dir = TMP_BASE_PATH / test_digest_id
+    digest_dir.mkdir(parents=True, exist_ok=True) # Directory exists, digest.json does not
+
+    requested_filename = "data.json"
+    try:
+        response = client.get(f"/download/{test_digest_id}?filename={requested_filename}")
+        assert response.status_code == 404
+        assert response.json() == {"detail": f"Digest file digest.json not found for ID {test_digest_id}."}
+    finally:
+        if digest_dir.exists():
+            shutil.rmtree(digest_dir)

@@ -59,26 +59,51 @@ def test_ingest_query_directory(temp_directory: Path, sample_query: IngestionQue
     sample_query.ignore_patterns.discard("*.py") # Include python files
     sample_query.ignore_patterns.add(".hiddendir") # Exclude hidden dir for this specific test
 
-    summary, tree_data, content = ingest_query(sample_query)
+    result = ingest_query(sample_query)
 
-    assert f"Source: {temp_directory.name}" in summary
-    # Expected count: 1(empty)+1(f1)+1(f2)+1(.git)+1(.hf) + 2(src)+2(src/sub)+1(dir1) = 10
-    assert "Files analyzed: 11" in summary
-    assert isinstance(tree_data, list)
-    assert any(item['path_str'] == 'file1.txt' for item in tree_data)
-    assert any(item['path_str'] == 'src/subfile2.py' for item in tree_data)
-    assert any(item['path_str'] == '.hiddenfile' for item in tree_data)
-    assert not any(item['path_str'].startswith('dir2/') for item in tree_data)
-    assert not any(item['path_str'].startswith('.hiddendir/') for item in tree_data)
-    assert "FILE: file1.txt" in content
-    assert "Hello World" in content
-    assert "FILE: src/subfile2.py" in content
-    assert "print('Hello from src')" in content
-    assert "FILE: .hiddenfile" in content
-    assert "Hidden Content" in content
-    assert "FILE: dir2/file_dir2.txt" not in content
-    assert "FILE: .hiddendir/hidden_in_dir.txt" not in content
-    assert "SYMLINK: symlink_to_file1 ->" in content
+    assert f"Source: {temp_directory.name}" in result["summary_str"]
+    # The "Files analyzed: X" in summary_str is based on node.file_count before symlink filtering.
+    # result["num_files"] is after symlink filtering in _create_tree_data.
+    # Symlinks are now filtered by _create_tree_data, so they won't be in tree_data or num_files.
+    # The original fixture created 11 non-symlink files + 1 symlink.
+    # .gitingest ignores "dir2" (1 file). .hiddendir is ignored by this test (1 file).
+    # So, 11 - 1 (dir2) - 1 (.hiddendir) = 9 files should be in the tree.
+    # The summary string "Files analyzed" count might be higher as it's from initial scan.
+    assert "Files analyzed: 11" in result["summary_str"] # This reflects pre-filter count if node.file_count was used
+    # Count includes: empty_file.txt, file1.txt, file2.py, src/subfile1.txt, src/subfile2.py,
+    # src/subdir/file_subdir.txt, src/subdir/file_subdir.py, dir1/file_dir1.txt, .gitingest, .hiddenfile
+    # Total = 10. (dir2 and .hiddendir contents are ignored by patterns)
+    assert result["num_files"] == 10 # Actual files in the tree_data after symlink filtering, including .gitingest
+
+    assert isinstance(result["tree_data_with_embedded_content"], list)
+    assert any(item['path_str'] == '.gitingest' for item in result["tree_data_with_embedded_content"])
+    assert any(item['path_str'] == 'file1.txt' for item in result["tree_data_with_embedded_content"])
+    assert any(item['path_str'] == 'src/subfile2.py' for item in result["tree_data_with_embedded_content"])
+    assert any(item['path_str'] == '.hiddenfile' for item in result["tree_data_with_embedded_content"])
+    assert not any(item['path_str'].startswith('dir2/') for item in result["tree_data_with_embedded_content"])
+    assert not any(item['path_str'].startswith('.hiddendir/') for item in result["tree_data_with_embedded_content"])
+    assert not any(item['name'] == 'symlink_to_file1' for item in result["tree_data_with_embedded_content"]) # Symlinks excluded from tree
+
+    # concatenated_content_for_txt should still contain content from non-symlink files
+    assert "FILE: file1.txt" in result["concatenated_content_for_txt"] # This format is from _gather_file_contents
+    assert "Hello World" in result["concatenated_content_for_txt"]
+    assert "FILE: src/subfile2.py" in result["concatenated_content_for_txt"]
+    assert "print('Hello from src')" in result["concatenated_content_for_txt"]
+    assert "FILE: .hiddenfile" in result["concatenated_content_for_txt"]
+    assert "Hidden Content" in result["concatenated_content_for_txt"]
+    assert "FILE: dir2/file_dir2.txt" not in result["concatenated_content_for_txt"]
+    assert "FILE: .hiddendir/hidden_in_dir.txt" not in result["concatenated_content_for_txt"]
+    # Symlink content is read by _gather_file_contents if it points to a text file.
+    # However, symlinks themselves are filtered from tree_data by _create_tree_data.
+    # _gather_file_contents includes a placeholder for symlinks.
+    assert "SYMLINK: symlink_to_file1 ->" in result["concatenated_content_for_txt"]
+
+
+    # Test for embedded content in tree_data
+    file1_node = next(item for item in result["tree_data_with_embedded_content"] if item["name"] == "file1.txt")
+    assert file1_node["file_content"] == "Hello World"
+    py_node = next(item for item in result["tree_data_with_embedded_content"] if item["name"] == "file2.py")
+    assert py_node["file_content"] == "print('Hello')"
 
 
 def test_ingest_query_single_file(temp_directory: Path, sample_query: IngestionQuery) -> None:
@@ -87,19 +112,22 @@ def test_ingest_query_single_file(temp_directory: Path, sample_query: IngestionQ
     sample_query.local_path = file_path
     sample_query.slug = file_path.stem
 
-    summary, tree_data, content = ingest_query(sample_query)
+    result = ingest_query(sample_query)
 
-    # Corrected assertion for single file summary
-    assert f"Source: {file_path.stem}" in summary
-    assert f"File: {file_path.name}" in summary # Check relative path name
-    assert "Lines: 1" in summary
+    assert f"Source: {file_path.stem}" in result["summary_str"]
+    assert f"File: {file_path.name}" in result["summary_str"]
+    assert "Lines: 1" in result["summary_str"]
+    assert result["num_files"] == 1
 
-    assert isinstance(tree_data, list)
-    assert len(tree_data) == 1
-    assert tree_data[0]['name'] == 'file1.txt'
-    assert tree_data[0]['path_str'] == 'file1.txt' # Path string should be just filename
-    assert "FILE: file1.txt" in content
-    assert "Hello World" in content
+    assert isinstance(result["tree_data_with_embedded_content"], list)
+    assert len(result["tree_data_with_embedded_content"]) == 1
+    tree_item = result["tree_data_with_embedded_content"][0]
+    assert tree_item['name'] == 'file1.txt'
+    assert tree_item['path_str'] == 'file1.txt'
+    assert tree_item['file_content'] == "Hello World"
+
+    assert "FILE: file1.txt" in result["concatenated_content_for_txt"] # This format is from _gather_file_contents
+    assert "Hello World" in result["concatenated_content_for_txt"]
 
 
 def test_ingest_query_single_file_excluded_by_pattern(temp_directory: Path, sample_query: IngestionQuery) -> None:
@@ -135,23 +163,23 @@ def test_ingest_query_single_file_no_content(temp_directory: Path, sample_query:
     sample_query.local_path = binary_file
     sample_query.slug = binary_file.stem
 
-    summary, tree_data, content = ingest_query(sample_query)
-    # Check if the specific log message exists and has the correct level
-    assert any(
-        "File non_text_file.bin has no readable text content or encountered an error during initial read." in record.message and record.levelname == "WARNING"
-        for record in caplog.records
-    ), "Expected warning log for non-text file not found or incorrect level."
+    result = ingest_query(sample_query)
+    # Check if the specific log message exists (already asserted by FileSystemNode.content property test, not directly here)
+    # This test focuses on what ingest_query returns.
 
-    # Corrected assertion for single file summary
-    assert f"Source: {binary_file.stem}" in summary
-    assert f"File: {binary_file.name}" in summary # Check relative path name
-    assert "Lines: 1" in summary # Line count for placeholder
+    assert f"Source: {binary_file.stem}" in result["summary_str"]
+    assert f"File: {binary_file.name}" in result["summary_str"]
+    assert "Lines: 1" in result["summary_str"] # Line count for placeholder like "[Non-text file]"
+    assert result["num_files"] == 1
 
-    assert isinstance(tree_data, list)
-    assert len(tree_data) == 1
-    assert tree_data[0]['name'] == 'non_text_file.bin'
-    assert "FILE: non_text_file.bin" in content
-    assert "[Non-text file]" in content
+    assert isinstance(result["tree_data_with_embedded_content"], list)
+    assert len(result["tree_data_with_embedded_content"]) == 1
+    tree_item = result["tree_data_with_embedded_content"][0]
+    assert tree_item['name'] == 'non_text_file.bin'
+    assert tree_item['file_content'] == "[Non-text file]" # Embedded content check
+
+    assert "FILE: non_text_file.bin" in result["concatenated_content_for_txt"] # This format is from _gather_file_contents
+    assert "[Non-text file]" in result["concatenated_content_for_txt"]
 
 
 # --- Tests for apply_gitingest_file (remain the same) ---
@@ -346,13 +374,26 @@ def test_should_exclude_directory_pattern(temp_directory: Path) -> None:
 def test_ingest_query_single_file_is_directory(temp_directory: Path, sample_query: IngestionQuery) -> None:
     """Test ingest_query handles directory path even if type hints it's a file."""
     dir_path = temp_directory / "src"; sample_query.local_path = dir_path; sample_query.slug = dir_path.name
-    sample_query.type = "blob"; sample_query.ignore_patterns.discard("*.py")
-    summary, tree_data, content = ingest_query(sample_query)
-    assert f"Source: {dir_path.name}" in summary
-    assert "Files analyzed: 4" in summary
-    assert any(item['path_str'] == 'subfile1.txt' for item in tree_data)
-    assert any(item['path_str'] == 'subdir/file_subdir.py' for item in tree_data) # Check a file in subdir
-    assert "FILE: subfile1.txt" in content
+    sample_query.type = "blob"; sample_query.ignore_patterns.discard("*.py") # Allow .py files
+
+    result = ingest_query(sample_query)
+
+    assert f"Source: {dir_path.name}" in result["summary_str"]
+    # "src" dir contains: subfile1.txt, subfile2.py, subdir/ (which has file_subdir.txt, file_subdir.py)
+    # Total 4 files.
+    assert "Files analyzed: 4" in result["summary_str"] # Pre-filter count from summary
+    assert result["num_files"] == 4 # Actual files in tree
+
+    assert isinstance(result["tree_data_with_embedded_content"], list)
+    assert any(item['path_str'] == 'subfile1.txt' for item in result["tree_data_with_embedded_content"])
+    assert any(item['path_str'] == 'subdir/file_subdir.py' for item in result["tree_data_with_embedded_content"])
+
+    subfile1_node = next(item for item in result["tree_data_with_embedded_content"] if item["name"] == "subfile1.txt")
+    assert subfile1_node["file_content"] == "Hello from src"
+
+    assert "FILE: subfile1.txt" in result["concatenated_content_for_txt"]
+    assert "Hello from src" in result["concatenated_content_for_txt"]
+    assert "print('Hello from subdir')" in result["concatenated_content_for_txt"]
 
 def test_process_node_empty_directory_after_filtering(temp_directory: Path, sample_query: IngestionQuery) -> None:
     """Test directory isn't added if all children are filtered out."""

@@ -3,10 +3,10 @@
 
 import logging
 from pathlib import Path
-from typing import Tuple, List # Added List type hint
+from typing import Tuple, List, Dict, Any # Added Dict, Any
 
 from CodeIngest.config import MAX_DIRECTORY_DEPTH, MAX_FILES, MAX_TOTAL_SIZE_BYTES
-from CodeIngest.output_formatters import format_node, TreeDataItem # Import TreeDataItem
+from CodeIngest.output_formatters import format_node, TreeDataItem, FormattedNodeData # Import FormattedNodeData
 from CodeIngest.query_parsing import IngestionQuery
 from CodeIngest.schemas import FileSystemNode, FileSystemNodeType, FileSystemStats
 from CodeIngest.utils.ingestion_utils import _should_exclude, _should_include
@@ -19,8 +19,8 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-# MODIFIED: ingest_query returns TreeDataItem list now
-def ingest_query(query: IngestionQuery) -> Tuple[str, List[TreeDataItem], str]:
+# MODIFIED: ingest_query returns a dictionary (FormattedNodeData)
+def ingest_query(query: IngestionQuery) -> FormattedNodeData: # Changed return type
     """
     Run the ingestion process for a parsed query.
 
@@ -35,8 +35,9 @@ def ingest_query(query: IngestionQuery) -> Tuple[str, List[TreeDataItem], str]:
 
     Returns
     -------
-    Tuple[str, List[TreeDataItem], str]
-        A tuple containing the summary, structured tree data, and file contents.
+    FormattedNodeData
+        A dictionary containing the summary, structured tree data (with embedded content),
+        directory structure text, token count, file count, and concatenated content.
 
     Raises
     ------
@@ -95,9 +96,8 @@ def ingest_query(query: IngestionQuery) -> Tuple[str, List[TreeDataItem], str]:
         if file_node._content_cache is not None and (file_node._content_cache == "[Non-text file]" or "Error" in file_node._content_cache): # Check cache
              logger.warning("File %s has no readable text content or encountered an error during initial read.", file_node.name)
 
-        # format_node now returns tree_data list
-        summary, tree_data, content_str = format_node(file_node, query) # Renamed to avoid conflict
-        return summary, tree_data, content_str
+        formatted_data = format_node(file_node, query)
+        return formatted_data
 
 
     # Handle directory ingestion
@@ -121,9 +121,8 @@ def ingest_query(query: IngestionQuery) -> Tuple[str, List[TreeDataItem], str]:
             base_path_for_rel=base_path_for_rel
         )
 
-         # format_node now returns tree_data list
-         summary, tree_data, content_str = format_node(root_node, query) # Renamed to avoid conflict
-         return summary, tree_data, content_str
+         formatted_data = format_node(root_node, query)
+         return formatted_data
 
 
     raise ValueError(f"Path is neither a file nor a directory: {path}")
