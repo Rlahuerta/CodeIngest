@@ -43,6 +43,9 @@ async def index_post(
                                        slider_position=max_file_size, pattern_type=pattern_type, pattern=pattern,
                                        branch_or_tag=branch_or_tag, download_format=download_format, is_index=True)
 
+        # Ensure the upload directory exists
+        RAW_UPLOADS_PATH.mkdir(parents=True, exist_ok=True) # <--- ADD THIS LINE
+
         # --- Save uploaded ZIP to a temporary path ---
         temp_zip_filename = f"{uuid.uuid4()}_{zip_file.filename}"
         temp_zip_save_path = RAW_UPLOADS_PATH / temp_zip_filename
