@@ -45,6 +45,7 @@ async def index_post(
         temp_zip_filename = f"{uuid.uuid4()}_{zip_file.filename}"
         temp_zip_save_path = RAW_UPLOADS_PATH / temp_zip_filename
         try:
+            zip_file.file.seek(0) # Add this line
             with open(temp_zip_save_path, "wb") as buffer:
                 shutil.copyfileobj(zip_file.file, buffer)
             # CRITICAL: actual_input_for_process_query IS NOW THE PATH TO THE SAVED ZIP
