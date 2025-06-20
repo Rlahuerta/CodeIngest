@@ -18,10 +18,12 @@ You can also replace `hub` with `ingest` in any GitHub URL to access the corresp
 - **CLI Tool**: Run `codeingest` as a shell command.
 - **Python Package**: Import `CodeIngest` in your Python code.
 
-## 📚 Requirements
+## Prerequisites
 
-- Python 3.10+
-- Git installed on your system
+Before running CodeIngest, ensure you have the following command-line tools installed and available in your system's PATH:
+- **Python**: Version 3.10 or higher is required.
+- **Git**: Required for cloning and interacting with Git repositories.
+- **cURL**: Used by some utilities to check remote repository existence (specifically for `check_repo_exists` functionality).
 
 ### 📦 Installation
 
@@ -159,9 +161,14 @@ You can run the included FastAPI web interface locally using Docker.
    docker run -d --name codeingest -p 8800:8800 codeingest:latest
    ```
 
-The application will be available at `http://localhost:9000`.
+The application will be available at `http://localhost:8800`.
 
 If you are hosting it on a domain, you can specify the allowed hostnames via env variable `ALLOWED_HOSTS`.
+
+   ``` bash
+   cd src/
+   poetry run uvicorn src.server.main:app --host 0.0.0.0 --port 8000
+   ```
 
    ```bash
    # Default: "CodeIngest.com, *.CodeIngest.com, localhost, 127.0.0.1".

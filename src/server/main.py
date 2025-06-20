@@ -1,6 +1,7 @@
 """Main module for the FastAPI application."""
 
 import os
+import logging
 from pathlib import Path
 from typing import Dict
 
@@ -17,6 +18,12 @@ from server.server_utils import lifespan, limiter, rate_limit_exception_handler
 
 # Load environment variables from .env file
 load_dotenv()
+
+# Configure basic logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 
 # Initialize the FastAPI application with lifespan
 app = FastAPI(lifespan=lifespan)

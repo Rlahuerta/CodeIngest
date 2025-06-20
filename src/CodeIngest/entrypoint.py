@@ -17,12 +17,12 @@ async def ingest_async(
     max_file_size: int = 10 * 1024 * 1024,  # 10 MB
     include_patterns: Optional[Union[str, Set[str]]] = None,
     exclude_patterns: Optional[Union[str, Set[str]]] = None,
-    branch: Optional[str] = None,
-    output: Optional[str] = None,
-) -> Tuple[str, List[TreeDataItem], str, IngestionQuery]:
+    branch: Optional[str] = None
+) -> Dict[str, Any]: # output parameter removed
     """
     Main entry point for ingesting a source and processing its contents.
-    # ... (docstring remains the same)
+    Returns a dictionary with structured data.
+    The 'output' parameter was removed as this function no longer handles file writing directly.
     """
     repo_cloned = False
     query: Optional[IngestionQuery] = None
@@ -40,24 +40,22 @@ async def ingest_async(
             repo_cloned = True
 
         # --- Ingestion ---
-        summary, tree_data, content = ingest_query(query)
+        # ingest_query now returns a dictionary
+        formatted_data_dict = ingest_query(query)
 
-        # --- Output ---
-        if output is not None:
-            # --- CORRECTED: Write output file using correct prefixes ---
-            try:
-                with open(output, "w", encoding="utf-8") as f:
-                     f.write("Directory structure:\n")
-                     for item in tree_data:
-                         # Use the pre-calculated prefix directly
-                         f.write(f"{item['prefix']}{item['name']}\n")
-                     f.write("\n" + content) # Append the actual file content
-            except OSError as e:
-                 # Handle potential file writing errors
-                 print(f"Warning: Could not write output file '{output}': {e}")
-            # --- END CORRECTION ---
+        # --- Output file writing is REMOVED from this function ---
+        # The 'output' parameter is effectively ignored by this function's direct logic now.
+        # Callers (like cli.py) will handle file writing based on the returned dictionary.
 
-        return summary, tree_data, content, query
+        return {
+            "summary_str": formatted_data_dict["summary_str"],
+            "tree_data": formatted_data_dict["tree_data_with_embedded_content"],
+            "directory_structure_text": formatted_data_dict["directory_structure_text_str"],
+            "num_tokens": formatted_data_dict["num_tokens"],
+            "num_files": formatted_data_dict["num_files"],
+            "concatenated_content": formatted_data_dict["concatenated_content_for_txt"],
+            "query_obj": query  # query object itself, not its model_dump
+        }
 
     finally:
         # (Cleanup logic remains the same)
@@ -71,12 +69,12 @@ def ingest(
     max_file_size: int = 10 * 1024 * 1024,  # 10 MB
     include_patterns: Optional[Union[str, Set[str]]] = None,
     exclude_patterns: Optional[Union[str, Set[str]]] = None,
-    branch: Optional[str] = None,
-    output: Optional[str] = None,
-) -> Tuple[str, List[TreeDataItem], str, IngestionQuery]:
+    branch: Optional[str] = None
+) -> Dict[str, Any]: # output parameter removed
     """
     Synchronous version of ingest_async.
-    # ... (docstring remains the same)
+    Returns a dictionary with structured data.
+    The 'output' parameter was removed as this function no longer handles file writing directly.
     """
     # (Implementation remains the same)
     try: loop = asyncio.get_running_loop()
@@ -85,4 +83,4 @@ def ingest(
                                                   max_file_size=max_file_size,
                                                   include_patterns=include_patterns,
                                                   exclude_patterns=exclude_patterns,
-                                                  branch=branch, output=output, ) )
+                                                  branch=branch ) ) # output argument removed from call

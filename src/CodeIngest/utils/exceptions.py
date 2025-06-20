@@ -35,3 +35,8 @@ class InvalidNotebookError(Exception):
 
     def __init__(self, message: str) -> None:
         super().__init__(message)
+
+
+class GitError(Exception):
+    """Exception raised for errors related to Git operations."""
+    pass

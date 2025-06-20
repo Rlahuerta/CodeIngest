@@ -2,6 +2,7 @@
 """Configuration for the server."""
 
 from typing import Dict, List
+from pathlib import Path # Added Path
 # from jinja2 import Environment # No longer needed
 from fastapi.templating import Jinja2Templates # Keep this
 
@@ -18,5 +19,7 @@ EXAMPLE_REPOS: List[Dict[str, str]] = [
 ]
 
 # --- REVERTED: Initialize Jinja2Templates normally ---
-templates = Jinja2Templates(directory="server/templates")
+# Calculate absolute path to 'server/templates' relative to this config file's location
+TEMPLATE_DIR = Path(__file__).resolve().parent / "templates"
+templates = Jinja2Templates(directory=TEMPLATE_DIR)
 # --- END REVERT ---

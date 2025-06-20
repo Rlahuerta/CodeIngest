@@ -1,14 +1,12 @@
 # src/CodeIngest/ingestion.py
 """Functions to ingest and analyze a codebase directory or single file."""
 
-import warnings
-import os # <--- ADDED IMPORT
+import logging
 from pathlib import Path
-from typing import Tuple, List # Added List type hint
-import sys # Import sys for stderr
+from typing import Tuple, List, Dict, Any # Added Dict, Any
 
 from CodeIngest.config import MAX_DIRECTORY_DEPTH, MAX_FILES, MAX_TOTAL_SIZE_BYTES
-from CodeIngest.output_formatters import format_node, TreeDataItem # Import TreeDataItem
+from CodeIngest.output_formatters import format_node, TreeDataItem, FormattedNodeData # Import FormattedNodeData
 from CodeIngest.query_parsing import IngestionQuery
 from CodeIngest.schemas import FileSystemNode, FileSystemNodeType, FileSystemStats
 from CodeIngest.utils.ingestion_utils import _should_exclude, _should_include
@@ -19,9 +17,10 @@ except ImportError:
     # For Python < 3.11
     import tomli as tomllib # type: ignore[no-redef]
 
+logger = logging.getLogger(__name__)
 
-# MODIFIED: ingest_query returns TreeDataItem list now
-def ingest_query(query: IngestionQuery) -> Tuple[str, List[TreeDataItem], str]:
+# MODIFIED: ingest_query returns a dictionary (FormattedNodeData)
+def ingest_query(query: IngestionQuery) -> FormattedNodeData: # Changed return type
     """
     Run the ingestion process for a parsed query.
 
@@ -36,8 +35,9 @@ def ingest_query(query: IngestionQuery) -> Tuple[str, List[TreeDataItem], str]:
 
     Returns
     -------
-    Tuple[str, List[TreeDataItem], str]
-        A tuple containing the summary, structured tree data, and file contents.
+    FormattedNodeData
+        A dictionary containing the summary, structured tree data (with embedded content),
+        directory structure text, token count, file count, and concatenated content.
 
     Raises
     ------
@@ -80,7 +80,7 @@ def ingest_query(query: IngestionQuery) -> Tuple[str, List[TreeDataItem], str]:
         if query.include_patterns and not _should_include(path, base_path_for_rel, query.include_patterns):
              raise ValueError(f"File '{path.name}' does not match include patterns.")
 
-        relative_path_str = str(path.relative_to(base_path_for_rel)).replace(os.sep, '/')
+        relative_path_str = path.relative_to(base_path_for_rel).as_posix()
 
         file_node = FileSystemNode(
             name=path.name,
@@ -94,17 +94,16 @@ def ingest_query(query: IngestionQuery) -> Tuple[str, List[TreeDataItem], str]:
         # Trigger content read to check for errors/non-text
         _ = file_node.content
         if file_node._content_cache is not None and (file_node._content_cache == "[Non-text file]" or "Error" in file_node._content_cache): # Check cache
-             warnings.warn(f"File {file_node.name} has no readable text content or encountered error.", UserWarning)
+             logger.warning("File %s has no readable text content or encountered an error during initial read.", file_node.name)
 
-        # format_node now returns tree_data list
-        summary, tree_data, content_str = format_node(file_node, query) # Renamed to avoid conflict
-        return summary, tree_data, content_str
+        formatted_data = format_node(file_node, query)
+        return formatted_data
 
 
     # Handle directory ingestion
     if path.is_dir():
          # Calculate relative path for the root node itself
-         root_path_str = "." if path == base_path_for_rel else str(path.relative_to(base_path_for_rel)).replace(os.sep, '/')
+         root_path_str = "." if path == base_path_for_rel else path.relative_to(base_path_for_rel).as_posix()
 
          root_node = FileSystemNode(
             name=path.name, # Use the target directory name
@@ -122,9 +121,8 @@ def ingest_query(query: IngestionQuery) -> Tuple[str, List[TreeDataItem], str]:
             base_path_for_rel=base_path_for_rel
         )
 
-         # format_node now returns tree_data list
-         summary, tree_data, content_str = format_node(root_node, query) # Renamed to avoid conflict
-         return summary, tree_data, content_str
+         formatted_data = format_node(root_node, query)
+         return formatted_data
 
 
     raise ValueError(f"Path is neither a file nor a directory: {path}")
@@ -138,25 +136,26 @@ def apply_gitingest_file(path: Path, query: IngestionQuery) -> None:
     try:
         with path_gitingest.open("rb") as f: data = tomllib.load(f)
     except tomllib.TOMLDecodeError as exc:
-        warnings.warn(f"Invalid TOML in {path_gitingest}: {exc}", UserWarning); return
+        logger.warning("Invalid TOML in %s: %s", path_gitingest, exc); return
+    except FileNotFoundError:
+        logger.debug(".gitingest file not found at %s, skipping.", path_gitingest); return
+    except PermissionError:
+        logger.warning("Permission denied when trying to read .gitingest file at %s.", path_gitingest); return
     except OSError as exc:
-        warnings.warn(f"Could not read {path_gitingest}: {exc}", UserWarning); return
+        logger.warning("An OS error occurred while reading .gitingest file at %s: %s", path_gitingest, exc); return
     config_section = data.get("config", {})
     ignore_patterns = config_section.get("ignore_patterns")
     if not ignore_patterns: return
     if isinstance(ignore_patterns, str): ignore_patterns = [ignore_patterns]
     if not isinstance(ignore_patterns, (list, set)):
-        warnings.warn(f"Expected list/set for 'ignore_patterns', got {type(ignore_patterns)} in {path_gitingest}. Skipping.", UserWarning); return
+        logger.warning("Expected list/set for 'ignore_patterns', got %s in %s. Skipping.", type(ignore_patterns), path_gitingest); return
     valid_patterns = {pattern for pattern in ignore_patterns if isinstance(pattern, str)}
     invalid_patterns = set(ignore_patterns) - valid_patterns
-    if invalid_patterns: warnings.warn(f"Ignoring non-string patterns {invalid_patterns} from {path_gitingest}.", UserWarning)
+    if invalid_patterns: logger.warning("Ignoring non-string patterns %s from %s.", invalid_patterns, path_gitingest)
     if not valid_patterns: return
     if query.ignore_patterns is None: query.ignore_patterns = valid_patterns
     else: query.ignore_patterns.update(valid_patterns)
 
-
-# Flag to print header only once for _process_node debug
-_process_node_debug_header_printed = False
 
 def _process_node(
     node: FileSystemNode,
@@ -167,7 +166,6 @@ def _process_node(
     """
     Recursively process a directory item, applying include/exclude patterns.
     """
-    global _process_node_debug_header_printed
     # (DEBUG PRINTING can remain or be removed)
 
     # Check limits before processing children
@@ -176,11 +174,11 @@ def _process_node(
 
     try:
         if not node.path.is_dir():
-             warnings.warn(f"Attempted to iterate non-directory: {node.path}", UserWarning)
+             logger.warning("Attempted to iterate non-directory: %s", node.path)
              return
         iterator = list(node.path.iterdir())
     except OSError as e:
-         warnings.warn(f"Cannot access directory contents {node.path}: {e}", UserWarning)
+         logger.warning("Cannot access directory contents %s: %s", node.path, e)
          return
 
     for sub_path in iterator:
@@ -214,7 +212,7 @@ def _process_node(
                 child_directory_node = FileSystemNode(
                     name=sub_path.name, type=FileSystemNodeType.DIRECTORY,
                     # Use os.sep here as Path objects handle it correctly
-                    path_str=str(sub_path.relative_to(base_path_for_rel)).replace(os.sep, '/'),
+                    path_str=sub_path.relative_to(base_path_for_rel).as_posix(),
                     path=sub_path, depth=node.depth + 1,
                 )
                 _process_node(node=child_directory_node, query=query, stats=stats, base_path_for_rel=base_path_for_rel)
@@ -224,7 +222,7 @@ def _process_node(
                     node.file_count += child_directory_node.file_count
                     node.dir_count += 1 + child_directory_node.dir_count
         else:
-            warnings.warn(f"Skipping unknown file type: {sub_path}", UserWarning)
+            logger.warning("Skipping unknown file type: %s", sub_path)
 
     node.sort_children()
 
@@ -235,13 +233,13 @@ def _process_symlink(path: Path, parent_node: FileSystemNode, stats: FileSystemS
         child = FileSystemNode(
             name=path.name, type=FileSystemNodeType.SYMLINK,
             # Use os.sep here as Path objects handle it correctly
-            path_str=str(path.relative_to(local_path)).replace(os.sep, '/'),
+            path_str=path.relative_to(local_path).as_posix(),
             path=path, depth=parent_node.depth + 1,
         )
         stats.total_files += 1 # Count towards file limit
         parent_node.children.append(child)
         parent_node.file_count += 1 # Count as file entry in parent stats
-    except Exception as e: warnings.warn(f"Failed to process symlink {path}: {e}", UserWarning)
+    except Exception as e: logger.warning("Failed to process symlink %s: %s", path, e)
 
 
 def _process_file(path: Path, parent_node: FileSystemNode, stats: FileSystemStats, local_path: Path, max_file_size: int) -> None:
@@ -251,22 +249,22 @@ def _process_file(path: Path, parent_node: FileSystemNode, stats: FileSystemStat
         return
 
     try: file_size = path.stat().st_size
-    except OSError as e: warnings.warn(f"Could not stat file {path}: {e}", UserWarning); return
+    except OSError as e: logger.warning("Could not stat file %s: %s", path, e); return
 
     if file_size > max_file_size:
-        warnings.warn(f"Skipping file {path.name} ({file_size} bytes): exceeds max file size ({max_file_size} bytes).", UserWarning); return
+        logger.info("Skipping file %s (%s bytes): exceeds max file size (%s bytes).", path.name, file_size, max_file_size); return
 
     # Check total size limit *before* adding current file's size
     if stats.total_size >= MAX_TOTAL_SIZE_BYTES or (stats.total_size + file_size > MAX_TOTAL_SIZE_BYTES) :
         if not stats.total_size_limit_reached:
-            warnings.warn(f"Total size limit ({MAX_TOTAL_SIZE_BYTES / (1024*1024):.1f} MB) reached.", UserWarning)
+            logger.info("Total size limit (%.1f MB) reached.", MAX_TOTAL_SIZE_BYTES / (1024*1024))
             stats.total_size_limit_reached = True
         return # Stop processing this file
 
     # Check total file count limit *before* incrementing
     if stats.total_files >= MAX_FILES:
         if not stats.total_file_limit_reached:
-            warnings.warn(f"Maximum file limit ({MAX_FILES}) reached.", UserWarning)
+            logger.info("Maximum file limit (%s) reached.", MAX_FILES)
             stats.total_file_limit_reached = True
         return # Stop processing this file
 
@@ -277,7 +275,7 @@ def _process_file(path: Path, parent_node: FileSystemNode, stats: FileSystemStat
     child = FileSystemNode(
         name=path.name, type=FileSystemNodeType.FILE, size=file_size, file_count=1,
         # Use os.sep here as Path objects handle it correctly
-        path_str=str(path.relative_to(local_path)).replace(os.sep, '/'),
+        path_str=path.relative_to(local_path).as_posix(),
         path=path, depth=parent_node.depth + 1,
     )
 
@@ -291,7 +289,7 @@ def limit_exceeded(stats: FileSystemStats, depth: int) -> bool:
     """Check if traversal limits have been exceeded."""
     if depth > MAX_DIRECTORY_DEPTH:
         if not stats.depth_limit_reached: # Check flag before warning
-            warnings.warn(f"Max directory depth ({MAX_DIRECTORY_DEPTH}) reached.", UserWarning)
+            logger.info("Max directory depth (%s) reached.", MAX_DIRECTORY_DEPTH)
             stats.depth_limit_reached = True # Set flag
         return True
     # Check the boolean flags set by _process_file

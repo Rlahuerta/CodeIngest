@@ -77,21 +77,69 @@ function copyFullDigest() {
     }).catch(err => { console.error('Failed to copy text: ', err); });
 }
 
-// Slider and other functions remain the same
-function logSliderToSize(position) { /* ... */ }
-function initializeSlider() { /* ... */ }
-function formatSize(sizeInKB) { /* ... */ }
-function setupGlobalEnterHandler() { /* ... */ }
+function logSliderToSize(position) {
+    const maxSliderPos = 500; // Max position of the slider
+    const minKB = 1;          // Min file size in KB
+    const maxKB = 102400;     // Max file size in KB (100MB)
+
+    // Logarithmic scale parameters
+    const minv = Math.log(minKB);
+    const maxv = Math.log(maxKB);
+
+    // Calculate the logarithmic value: position^1.5 normalized to range, then scaled
+    const scale = (maxv - minv) / Math.pow(maxSliderPos, 1.5);
+    let sizeInKB = Math.exp(minv + scale * Math.pow(position, 1.5));
+
+    return Math.round(sizeInKB);
+}
+
+function formatSize(sizeInKB) {
+    if (sizeInKB < 1024) {
+        return sizeInKB + ' KB';
+    } else {
+        const sizeInMB = sizeInKB / 1024;
+        return sizeInMB.toFixed(1) + ' MB';
+    }
+}
+
+function initializeSlider() {
+    const slider = document.getElementById('file_size');
+    const sizeValueDisplay = document.getElementById('size_value');
+
+    if (!slider || !sizeValueDisplay) {
+        // console.warn("Slider or size display element not found."); // Original comment
+        return;
+    }
+
+    function updateSliderAppearance() {
+        const value = parseInt(slider.value, 10);
+        const max = parseInt(slider.max, 10);
+
+        const sizeInKB = logSliderToSize(value);
+        sizeValueDisplay.textContent = formatSize(sizeInKB);
+
+        const percentage = (value / max) * 100;
+        slider.style.backgroundSize = percentage + '% 100%';
+    }
+
+    // Initial update
+    updateSliderAppearance();
+
+    // Add event listener for changes
+    slider.addEventListener('input', updateSliderAppearance);
+}
+
+function setupGlobalEnterHandler() { /* ... */ } // Assuming this is defined elsewhere or not critical for this task
 
 document.addEventListener('DOMContentLoaded', () => {
     initializeSlider();
-    setupGlobalEnterHandler();
+    setupGlobalEnterHandler(); // Assuming this is defined elsewhere or not critical for this task
 });
 
 // Make functions globally available if needed by inline handlers
-window.copyText = copyText;
+// window.copyText = copyText; // copyText is not defined in this file
 window.copyDirectoryStructureText = copyDirectoryStructureText; // Ensure this is global
 window.copyFullDigest = copyFullDigest;       // Ensure this is global
 window.toggleFile = toggleFile;               // Ensure this is global
-window.handleSubmit = handleSubmit;           // Assuming handleSubmit exists elsewhere or is defined above
-// window.submitExample = submitExample; // If submitExample is needed globally
+// window.handleSubmit = handleSubmit;        // handleSubmit is not defined in this file
+// window.submitExample = submitExample; // submitExample is not defined in this file
