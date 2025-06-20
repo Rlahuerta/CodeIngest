@@ -18,7 +18,7 @@ import logging
 # --- Core CodeIngest imports ---
 from CodeIngest.entrypoint import ingest_async
 from CodeIngest.config import TMP_BASE_PATH
-from CodeIngest.output_formatters import TreeDataItem
+# Removed import of TreeDataItem as it's no longer used here
 from CodeIngest.utils.exceptions import GitError, InvalidPatternError # Assuming IngestionError might be too broad for now
 
 # --- Server specific imports ---

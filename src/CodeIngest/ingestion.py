@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Tuple, List, Dict, Any # Added Dict, Any
 
 from CodeIngest.config import MAX_DIRECTORY_DEPTH, MAX_FILES, MAX_TOTAL_SIZE_BYTES
-from CodeIngest.output_formatters import format_node, TreeDataItem, FormattedNodeData # Import FormattedNodeData
+from CodeIngest.output_formatters import format_node, FormattedNodeData # Removed TreeDataItem
 from CodeIngest.query_parsing import IngestionQuery
 from CodeIngest.schemas import FileSystemNode, FileSystemNodeType, FileSystemStats
 from CodeIngest.utils.ingestion_utils import _should_exclude, _should_include

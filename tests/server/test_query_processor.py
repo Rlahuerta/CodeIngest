@@ -113,17 +113,28 @@ async def test_process_query_success_url_path(mock_ingest_async, mock_open, mock
     mock_summary = "Summary: URL Ingestion successful."
     # mock_tree_data is used for the old assertion, will be replaced by mock_tree_data_with_content
     mock_content_str = "File content for success." # This is concatenated_content
+    mock_file_content_for_txt_test = "File content for success."
 
-    # New mock values for the dictionary structure
-    mock_file_content = "File content for success." # This is the individual file's content
-    mock_tree_data_with_content = [{"id": "1", "name": "file.py", "type": "FILE", "prefix": "", "path_str": "file.py", "file_content": mock_file_content}]
-    mock_dir_structure_text = "file.py" # Simplified for this mock, based on mock_tree_data_with_content
+    mock_nested_tree_root_for_txt_test = {
+        "name": mock_repo_slug + "/",
+        "path": ".",
+        "type": "DIRECTORY",
+        "children": [
+            {
+                "name": "file.py",
+                "path": "file.py",
+                "type": "FILE",
+                "file_content": mock_file_content_for_txt_test
+            }
+        ]
+    }
+    mock_dir_structure_text = "file.py" # This is based on the single file in the mock tree
     mock_num_tokens = 5
-    mock_num_files = 1
+    mock_num_files = 1  # From mock_nested_tree_root_for_txt_test
 
     mock_ingestion_result = {
         "summary_str": mock_summary,
-        "tree_data": mock_tree_data_with_content, # Use the one with embedded content for context
+        "tree_data": mock_nested_tree_root_for_txt_test,
         "directory_structure_text": mock_dir_structure_text,
         "num_tokens": mock_num_tokens,
         "num_files": mock_num_files,
@@ -151,9 +162,9 @@ async def test_process_query_success_url_path(mock_ingest_async, mock_open, mock
     assert response.template.name == "index.jinja"
     context = response.context
     assert context["result"] is True
-    assert context["summary"] == mock_summary # Check against mock_summary from ingestion_result
-    assert context["tree_data"] == mock_tree_data_with_content # Check against new tree data from ingestion_result
-    assert context["content"].startswith(mock_content_str[:100]) # Check UI content against concatenated_content
+    assert context["summary"] == mock_summary
+    assert context["tree_data"] == mock_nested_tree_root_for_txt_test
+    assert context["content"].startswith(mock_content_str[:100])
     assert context["ingest_id"] == mock_query_id
     assert context["encoded_download_filename"] is not None
     assert mock_repo_slug in context["encoded_download_filename"]
@@ -186,7 +197,9 @@ async def test_process_query_success_url_path_include_pattern(mock_ingest_async,
     # mock_query_obj.user_name = "testuser"   # Not strictly needed for this test's assertions
 
     minimal_mock_ingestion_result_include = {
-        "summary_str": "Include Summary", "tree_data": [], "directory_structure_text": "",
+        "summary_str": "Include Summary",
+        "tree_data": {"name": mock_query_obj.slug + "/", "path": ".", "type": "DIRECTORY", "children": []},
+        "directory_structure_text": "",
         "num_tokens": 0, "num_files": 0, "concatenated_content": "", "query_obj": mock_query_obj
     }
     mock_ingest_async.return_value = minimal_mock_ingestion_result_include
@@ -215,7 +228,9 @@ async def test_process_query_ingest_async_returns_no_query_id(mock_ingest_async)
     mock_query_obj_no_id = MagicMock(spec=IngestionQuery, id=None, slug="no-id-repo", url="http://example.com/no-id", branch="main")
 
     mock_ingestion_result_no_id = {
-        "summary_str": "Summary No ID", "tree_data": [], "directory_structure_text": "",
+        "summary_str": "Summary No ID",
+        "tree_data": {"name": mock_query_obj_no_id.slug + "/", "path": ".", "type": "DIRECTORY", "children": []},
+        "directory_structure_text": "",
         "num_tokens": 0, "num_files": 0, "concatenated_content": "", "query_obj": mock_query_obj_no_id
     }
     mock_ingest_async.return_value = mock_ingestion_result_no_id
@@ -236,7 +251,9 @@ async def test_process_query_ingest_async_returns_no_query_id(mock_ingest_async)
     mock_ingest_async.reset_mock() # Reset for the next scenario in the same test
 
     mock_ingestion_result_none_obj = {
-        "summary_str": "Summary None Obj", "tree_data": [], "directory_structure_text": "",
+        "summary_str": "Summary None Obj",
+        "tree_data": {}, # Empty dict if query_obj is None and nested_tree_root becomes None
+        "directory_structure_text": "",
         "num_tokens": 0, "num_files": 0, "concatenated_content": "", "query_obj": None
     }
     mock_ingest_async.return_value = mock_ingestion_result_none_obj
@@ -277,14 +294,22 @@ async def test_process_query_invalid_pattern_type_direct_call():
 async def test_process_query_success_local_path_is_local_true(mock_ingest_async, mock_open, mock_makedirs):
     req = mock_request()
     mock_query_obj = MagicMock(spec=IngestionQuery, id="local-id", slug="local-folder", url=None, branch=None, commit=None)
-
+    mock_local_file_content = "Local content"
+    mock_nested_tree_for_local_path = {
+        "name": mock_query_obj.slug + "/",
+        "path": ".", "type": "DIRECTORY",
+        "children": [{
+            "name": "file.local", "path": "file.local", "type": "FILE",
+            "file_content": mock_local_file_content
+        }]
+    }
     mock_ingestion_result_local = {
         "summary_str": "Summary local",
-        "tree_data": [{"id":"f1","name":"file.local","type":"FILE","prefix":"","path_str":"file.local", "file_content": "Local content"}],
-        "directory_structure_text": "file.local",
+        "tree_data": mock_nested_tree_for_local_path,
+        "directory_structure_text": "file.local", # This would be generated by _generate_text_tree_lines_recursive
         "num_tokens": 3,
         "num_files": 1,
-        "concatenated_content": "Local content",
+        "concatenated_content": mock_local_file_content, # If only one file
         "query_obj": mock_query_obj
     }
     mock_ingest_async.return_value = mock_ingestion_result_local
@@ -375,14 +400,22 @@ async def test_process_query_handles_generic_exception_from_ingest(mock_ingest_a
 async def test_process_query_digest_write_os_error(mock_ingest_async, mock_open, mock_makedirs):
     req = mock_request()
     mock_query_obj = MagicMock(spec=IngestionQuery, id="os-error-id", slug="os-error-repo", url="http://example.com/os-error", branch="main", commit=None)
-
+    mock_os_error_file_content = "Content"
+    mock_nested_tree_for_os_error = {
+        "name": mock_query_obj.slug + "/",
+        "path": ".", "type": "DIRECTORY",
+        "children": [{
+            "name": "f.py", "path": "f.py", "type": "FILE",
+            "file_content": mock_os_error_file_content
+        }]
+    }
     mock_ingestion_result_os_error = {
         "summary_str": "Summary OS Error",
-        "tree_data": [{"id":"f","name":"f.py","type":"FILE","prefix":"","path_str":"f.py", "file_content":"Content"}],
-        "directory_structure_text": "f.py",
+        "tree_data": mock_nested_tree_for_os_error,
+        "directory_structure_text": "f.py", # This would be generated
         "num_tokens": 1,
         "num_files": 1,
-        "concatenated_content": "Content",
+        "concatenated_content": mock_os_error_file_content,
         "query_obj": mock_query_obj
     }
     mock_ingest_async.return_value = mock_ingestion_result_os_error
@@ -413,7 +446,9 @@ async def test_process_query_filename_gen_with_commit_hash(mock_ingest_async, mo
     mock_query_obj = MagicMock(spec=IngestionQuery, id="commit-id", slug="commit-repo", url="http://example.com/commit-repo", branch=None, commit=commit_hash)
 
     mock_ingestion_result_commit = {
-        "summary_str": "Summary Commit Hash", "tree_data": [], "directory_structure_text": "",
+        "summary_str": "Summary Commit Hash",
+        "tree_data": {"name": mock_query_obj.slug + "/", "path": ".", "type": "DIRECTORY", "children": []},
+        "directory_structure_text": "",
         "num_tokens": 0, "num_files": 0, "concatenated_content": "", "query_obj": mock_query_obj
     }
     mock_ingest_async.return_value = mock_ingestion_result_commit
@@ -468,15 +503,28 @@ async def test_process_query_success_json_download(mock_ingest_async, mock_open,
     mock_summary_str = "JSON Summary"
     mock_file_content = "print('hello json')"
     # Note: tree_data in ingestion_result is tree_data_with_embedded_content
-    mock_tree_data_val = [{"name": "file.py", "type": "FILE", "prefix": "", "path_str": "file.py", "file_content": mock_file_content}]
-    mock_dir_text_val = "file.py" # This is directory_structure_text
-    mock_tokens_val = 10
-    mock_files_val = 1
-    mock_concat_content_val = mock_file_content # This is concatenated_content
+    mock_file_content_for_json_test = "print('hello json from test')" # Distinct content
+    mock_nested_tree_root_for_json_test = {
+        "name": mock_repo_slug + "/",
+        "path": ".",
+        "type": "DIRECTORY",
+        "children": [
+            {
+                "name": "file.py",
+                "path": "file.py",
+                "type": "FILE",
+                "file_content": mock_file_content_for_json_test
+            }
+        ]
+    }
+    mock_dir_text_val = f"{mock_repo_slug}/\n└── file.py" # More realistic dir structure text
+    mock_tokens_val = 10 # Example
+    mock_files_val = 1   # From mock_nested_tree_root_for_json_test
+    mock_concat_content_val = mock_file_content_for_json_test
 
     mock_ingestion_result = {
         "summary_str": mock_summary_str,
-        "tree_data": mock_tree_data_val, # This corresponds to tree_data_with_embedded_content
+        "tree_data": mock_nested_tree_root_for_json_test,
         "directory_structure_text": mock_dir_text_val,
         "num_tokens": mock_tokens_val,
         "num_files": mock_files_val,
@@ -503,7 +551,7 @@ async def test_process_query_success_json_download(mock_ingest_async, mock_open,
     context = response.context
     assert context["result"] is True
     assert context["summary"] == mock_summary_str
-    assert context["tree_data"] == mock_tree_data_val # This is tree_data_with_embedded_content
+    assert context["tree_data"] == mock_nested_tree_root_for_json_test
     assert context["encoded_download_filename"].endswith(".json")
 
     expected_digest_dir = TMP_BASE_PATH / mock_query_id
@@ -522,8 +570,8 @@ async def test_process_query_success_json_download(mock_ingest_async, mock_open,
     expected_data_to_save = {
         "summary": mock_summary_str,
         "metadata": expected_metadata_obj,
-        "tree": mock_tree_data_val, # This is tree_data_with_embedded_content from output_formatters
-        "query": expected_query_dump_content # Use the predefined dictionary here
+        "tree": mock_nested_tree_root_for_json_test,
+        "query": expected_query_dump_content
     }
 
     # Capture what was written to file

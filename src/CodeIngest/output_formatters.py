@@ -179,7 +179,10 @@ def _create_tree_data(
 
     relative_path_str: str
     if node.path == repo_root_path:
-        relative_path_str = "." # Root of the sub-tree being processed by this call
+        if node.type == FileSystemNodeType.FILE:
+            relative_path_str = current_node_name # Use the filename itself as path
+        else: # DIRECTORY
+            relative_path_str = "." # Root directory path is "."
     else:
         try:
             # Ensure relative_to is only called if node.path is indeed deeper than repo_root_path

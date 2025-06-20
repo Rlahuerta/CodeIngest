@@ -10,7 +10,7 @@ from CodeIngest.cloning import clone_repo
 from CodeIngest.config import TMP_BASE_PATH
 from CodeIngest.ingestion import ingest_query
 from CodeIngest.query_parsing import IngestionQuery, parse_query
-from CodeIngest.output_formatters import TreeDataItem # Import the type alias
+# Removed import of TreeDataItem as it's no longer used here
 
 async def ingest_async(
     source: str,

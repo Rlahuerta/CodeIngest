@@ -6,6 +6,7 @@ import json # Added import
 import pytest
 from pathlib import Path
 from click.testing import CliRunner
+from typing import Optional, Dict, Any # Added typing imports
 
 from CodeIngest.cli import main
 from CodeIngest.config import MAX_FILE_SIZE, OUTPUT_FILE_NAME
@@ -128,19 +129,18 @@ def test_cli_json_output():
         assert "sample.py" in metadata["directory_structure_text"]
 
         # Tree checks
-        assert isinstance(data["tree"], list)
-        # The tree will contain the root directory node and the file node.
-        # Example: source_dir = "test_repo", file is "sample.py"
-        # Tree might be: [{name: "test_repo/", ...}, {name: "sample.py", ...}] or just [{name: "sample.py", ...}] if root is implicit
-        # Given current _create_tree_data, root directory IS included.
-        assert len(data["tree"]) >= 1 # Contains at least the root dir node, or file if root is a file
+        assert isinstance(data["tree"], dict) # Changed from list to dict
+        assert data["tree"] is not None
 
-        sample_py_node = next((item for item in data["tree"] if item["name"] == "sample.py"), None)
+        # Find node using helper. data["tree"] is the root node.
+        # sample.py is a direct child of source_dir (test_repo)
+        # Its path in the nested tree will be "sample.py" relative to the root "."
+        sample_py_node = find_node_in_nested_tree(data["tree"], "sample.py")
         assert sample_py_node is not None, "sample.py node not found in tree"
         assert sample_py_node["type"] == "FILE"
         assert "file_content" in sample_py_node
         assert sample_py_node["file_content"] == "print('hello')"
-        assert sample_py_node["full_relative_path"] == "sample.py"
+        # 'path' key is already verified by find_node_in_nested_tree matching "sample.py"
 
         # Query checks
         assert data["query"]["local_path"] == str(source_dir)
@@ -207,15 +207,34 @@ def test_cli_json_default_output_filename():
         assert "main.rs" in metadata["directory_structure_text"]
 
         # Tree checks
-        assert isinstance(data["tree"], list)
-        assert len(data["tree"]) >= 1
-        main_rs_node = next((item for item in data["tree"] if item["name"] == "main.rs"), None)
+        assert isinstance(data["tree"], dict) # Changed from list to dict
+        assert data["tree"] is not None
+
+        # Find node using helper. data["tree"] is the root node.
+        # main.rs is a direct child of source_dir (my_project)
+        # Its path in the nested tree will be "main.rs" relative to the root "."
+        main_rs_node = find_node_in_nested_tree(data["tree"], "main.rs")
         assert main_rs_node is not None, "main.rs node not found in tree"
         assert main_rs_node["type"] == "FILE"
         assert "file_content" in main_rs_node
         assert main_rs_node["file_content"] == "fn main() {}"
-        assert main_rs_node["full_relative_path"] == "main.rs"
+        # 'path' key is already verified by find_node_in_nested_tree matching "main.rs"
 
         # Query checks
         assert data["query"]["local_path"] == str(source_dir)
         # assert data["query"]["output_format"] == "json" # output_format is not in IngestionQuery schema
+
+# Helper function to find a node in the new nested tree structure
+def find_node_in_nested_tree(node: Optional[Dict[str, Any]], target_path: str) -> Optional[Dict[str, Any]]:
+    if not node:
+        return None
+    # Assuming 'path' is the key for the relative path in the nested tree nodes
+    if node.get("path") == target_path:
+        return node
+
+    if node.get("type") == "DIRECTORY" and "children" in node and isinstance(node["children"], list):
+        for child in node["children"]:
+            found = find_node_in_nested_tree(child, target_path)
+            if found:
+                return found
+    return None
