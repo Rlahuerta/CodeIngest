@@ -10,7 +10,9 @@ import tiktoken
 from CodeIngest.query_parsing import IngestionQuery
 from CodeIngest.schemas import FileSystemNode, FileSystemNodeType
 
-TreeDataItem = Dict[str, Any]
+# New type alias for nested tree structure
+NestedTreeDataItem = Dict[str, Any]
+# Old TreeDataItem (flat list item) is removed.
 
 # New return type for format_node
 FormattedNodeData = Dict[str, Any]
@@ -38,6 +40,40 @@ def _parse_token_estimate_str_to_int(token_str: Optional[str]) -> int:
         except ValueError:
             return 0
 
+def _count_files_in_nested_tree(node: Optional[NestedTreeDataItem]) -> int:
+    if not node:
+        return 0
+    count = 1 if node.get("type") == FileSystemNodeType.FILE.name else 0
+    # Check if 'children' key exists and if it's a list before iterating
+    if node.get("type") == FileSystemNodeType.DIRECTORY.name and isinstance(node.get("children"), list):
+        for child in node["children"]:
+            count += _count_files_in_nested_tree(child)
+    return count
+
+def _generate_text_tree_lines_recursive(node: NestedTreeDataItem, parent_prefix_for_child: str, is_last_sibling: bool, lines: List[str]):
+    connector = "└── " if is_last_sibling else "├── "
+
+    # parent_prefix_for_child:
+    # "ROOT_NODE_ITSELF" -> This is the root node itself. Print name, set children's base_prefix to ""
+    # ""                 -> This is a direct child of the root. Print connector + name, set children's base_prefix to "    " or "│   "
+    # "..."              -> This is a deeper node. Print connector + name, extend parent's base_prefix for children.
+
+    if parent_prefix_for_child == "ROOT_NODE_ITSELF":
+         lines.append(node['name'])
+         current_prefix_for_children = ""
+    elif parent_prefix_for_child == "":
+        lines.append(f"{connector}{node['name']}")
+        current_prefix_for_children = "    " if is_last_sibling else "│   "
+    else:
+        lines.append(f"{parent_prefix_for_child}{connector}{node['name']}")
+        current_prefix_for_children = parent_prefix_for_child + ("    " if is_last_sibling else "│   ")
+
+    if node.get("type") == FileSystemNodeType.DIRECTORY.name and isinstance(node.get("children"), list):
+        children = node["children"]
+        num_children = len(children)
+        for i, child in enumerate(children):
+            _generate_text_tree_lines_recursive(child, current_prefix_for_children, i == num_children - 1, lines)
+
 def format_node(node: FileSystemNode, query: IngestionQuery) -> FormattedNodeData: # Changed return type
     """
     Generate a structured dictionary containing summary, tree data with embedded content,
@@ -59,18 +95,17 @@ def format_node(node: FileSystemNode, query: IngestionQuery) -> FormattedNodeDat
         except (ValueError, AttributeError):
              summary += "Lines: N/A\n"
 
-    repo_root_path_for_links = query.local_path
-    # tree_data now potentially has file_content embedded, and symlinks are filtered out
-    tree_data: List[TreeDataItem] = _create_tree_data(node, repo_root_path=repo_root_path_for_links, parent_prefix="")
+    # Call the new _create_tree_data
+    nested_tree_root: Optional[NestedTreeDataItem] = _create_tree_data(node, query.local_path)
 
-    # Create directory_structure_text_str from the (filtered) tree_data
-    dir_struct_lines = []
-    for item in tree_data:
-        dir_struct_lines.append(f"{item['prefix']}{item['name']}")
-    directory_structure_text_str = "\n".join(dir_struct_lines)
+    # Generate directory_structure_text_str using the helper function
+    text_tree_lines: List[str] = []
+    if nested_tree_root:
+        _generate_text_tree_lines_recursive(nested_tree_root, "ROOT_NODE_ITSELF", True, text_tree_lines)
+    directory_structure_text_str = "\n".join(text_tree_lines)
 
-    # Calculate num_files_in_tree from the generated (and filtered) tree_data
-    num_files_in_tree = sum(1 for item in tree_data if item['type'] == FileSystemNodeType.FILE.name)
+    # Calculate num_files_in_tree using the helper function
+    num_files_in_tree = _count_files_in_nested_tree(nested_tree_root)
 
     # Concatenated content for token estimation and TXT output
     concatenated_content_str = _gather_file_contents(node) # Gathers content from non-symlink files
@@ -93,10 +128,10 @@ def format_node(node: FileSystemNode, query: IngestionQuery) -> FormattedNodeDat
 
     return {
         "summary_str": summary,
-        "tree_data_with_embedded_content": tree_data,
-        "directory_structure_text_str": directory_structure_text_str,
+        "tree_data_with_embedded_content": nested_tree_root if nested_tree_root else {},
+        "directory_structure_text_str": directory_structure_text_str, # Using placeholder
         "num_tokens": parsed_num_tokens,
-        "num_files": num_files_in_tree,
+        "num_files": num_files_in_tree, # Using placeholder
         "concatenated_content_for_txt": concatenated_content_str
     }
 
@@ -121,84 +156,61 @@ def _gather_file_contents(node: FileSystemNode) -> str:
     return ""
 
 
-# --- REVISED _create_tree_data to calculate full relative path ---
 def _create_tree_data(
     node: FileSystemNode,
-    repo_root_path: Path, # Add repo root path
-    depth: int = 0,
-    is_last_sibling: bool = True,
-    parent_prefix: str = ""
-) -> List[TreeDataItem]:
+    repo_root_path: Path
+) -> Optional[NestedTreeDataItem]: # Changed signature and return type
     """
-    Recursively generate structured data representing the file tree.
-    Includes the correctly formatted prefix string, full relative path, and embedded file content.
+    Recursively generate a nested dictionary representing the file tree.
     Symlinks are excluded.
     """
     if node.type == FileSystemNodeType.SYMLINK:
-        return [] # Do not include symlinks in the tree
+        return None # Exclude symlinks
 
-    tree_list: List[TreeDataItem] = []
-    prefix = parent_prefix + ("└── " if is_last_sibling else "├── ") if depth > 0 else parent_prefix
+    current_node_name = node.name
+    # If the node being processed is the explicitly passed root of the repository
+    if node.path == repo_root_path:
+        current_node_name = node.path.name # Use the actual folder name for the root display
 
-    # --- Construct Display Name ---
-    display_name = node.name
-    node_type_str = node.type.name # e.g. "FILE", "DIRECTORY"
-    link_target = "" # Will remain empty for non-symlinks as symlinks are filtered out
-    is_root_node = depth == 0
     if node.type == FileSystemNodeType.DIRECTORY:
-        if not is_root_node or node.name != '.': display_name += "/"
-        elif is_root_node and node.name == '.': display_name = node.path.name + "/"
-    elif node.type == FileSystemNodeType.SYMLINK: # This block should not be reached due to early filter
-        try: link_target = node.path.readlink().as_posix(); display_name += f" -> {link_target}"
-        except OSError: display_name += " -> [Broken Link]"; link_target = "[Broken Link]"
-    if is_root_node and node.name == '.': display_name = node.path.name + ("/" if node.type == FileSystemNodeType.DIRECTORY else "")
+        display_name = current_node_name + "/"
+    else:
+        display_name = current_node_name
 
-    # --- Calculate FULL Relative Path from Repo Root ---
-    try:
-        # Calculate path relative to the *repo root* passed down
-        full_relative_path = node.path.relative_to(repo_root_path).as_posix()
-         # Handle root case where relative path might be '.'
-        if full_relative_path == '.':
-             full_relative_path = "" # Root of the repo, relative path is empty for URL construction
-    except ValueError:
-         # Should not happen if repo_root_path is correct, but fallback
-         full_relative_path = node.path_str.replace(os.sep, '/')
-    except Exception: # Catch other potential errors
-        full_relative_path = node.path_str.replace(os.sep, '/') # Fallback
+    relative_path_str: str
+    if node.path == repo_root_path:
+        relative_path_str = "." # Root of the sub-tree being processed by this call
+    else:
+        try:
+            # Ensure relative_to is only called if node.path is indeed deeper than repo_root_path
+            if node.path.is_relative_to(repo_root_path): # Check if it's a subpath
+                 relative_path_str = node.path.relative_to(repo_root_path).as_posix()
+            else: # If not a subpath (e.g. sibling, or different root), use its name as path
+                 relative_path_str = node.path.name
+        except ValueError:
+            # Fallback if relative_to fails for some other reason
+            relative_path_str = node.path.name
 
-    # --- Add Node to List ---
-    item_data: TreeDataItem = { # Explicitly type item_data
+    item_data: NestedTreeDataItem = { # Use NestedTreeDataItem for clarity
         "name": display_name,
-        "type": node_type_str,
-        "path_str": node.path_str.replace(os.sep, '/'),
-        "full_relative_path": full_relative_path,
-        "depth": depth,
-        "link_target": link_target, # Will be empty as symlinks are filtered
-        "prefix": prefix,
-        "is_last": is_last_sibling,
+        "path": relative_path_str,
+        "type": node.type.name,
     }
+
     if node.type == FileSystemNodeType.FILE:
         item_data["file_content"] = node.content # node.content is a property
 
-    tree_list.append(item_data)
+    elif node.type == FileSystemNodeType.DIRECTORY:
+        children_list = []
+        if node.children:
+            # node.sort_children() is called by _process_node in ingestion.py
+            for child_fs_node in node.children:
+                child_tree_item = _create_tree_data(child_fs_node, repo_root_path)
+                if child_tree_item:
+                    children_list.append(child_tree_item)
+        item_data["children"] = children_list
 
-    # --- Recurse into Children ---
-    if node.type == FileSystemNodeType.DIRECTORY and node.children:
-        # Filter out symlinks before determining is_last_sibling for correct prefix
-        processed_children = [child for child in node.children if child.type != FileSystemNodeType.SYMLINK]
-        num_processed_children = len(processed_children)
-
-        child_indent = parent_prefix + ("    " if is_last_sibling else "│   ") if depth >= 0 else "" # Always indent children
-        for i, child_node in enumerate(processed_children):
-            is_last = (i == num_processed_children - 1)
-            # Pass repo_root_path down
-            # _create_tree_data itself will return [] for any symlinks if they somehow weren't pre-filtered,
-            # but pre-filtering here ensures correct is_last logic for siblings.
-            tree_list.extend(_create_tree_data(
-                child_node, repo_root_path, depth + 1, is_last_sibling=is_last, parent_prefix=child_indent
-            ))
-
-    return tree_list
+    return item_data
 
 # (_format_token_count remains the same)
 def _format_token_count(text: str) -> Optional[str]:

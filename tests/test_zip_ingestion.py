@@ -5,9 +5,10 @@ import zipfile
 import pytest
 import shutil
 from pathlib import Path
+from typing import Optional, Dict, Any # Added imports
 from CodeIngest.query_parsing import parse_query
 from CodeIngest.ingestion import ingest_query
-from CodeIngest.schemas import IngestionQuery
+from CodeIngest.schemas import IngestionQuery, FileSystemNodeType # Added FileSystemNodeType
 
 # (Fixture sample_query remains the same)
 @pytest.fixture
@@ -49,27 +50,40 @@ async def test_ingest_query_zip_basic(temp_zip_file: Path, sample_query: Ingesti
         result = ingest_query(query)
         assert f"Source: {temp_zip_file.stem}" in result["summary_str"]
         # Zip contains: empty_file.txt, file1.txt, file2.py, subdir/sub_file.txt = 4 files
-        assert "Files analyzed: 4" in result["summary_str"] # From original node.file_count
-        assert result["num_files"] == 4 # Actual files in tree (no symlinks in this zip)
+        assert "Files analyzed: 4" in result["summary_str"]
+        assert result["num_files"] == 4
 
-        assert isinstance(result["tree_data_with_embedded_content"], list)
-        assert any(item['path_str'] == 'file1.txt' for item in result["tree_data_with_embedded_content"])
-        assert any(item['path_str'] == 'file2.py' for item in result["tree_data_with_embedded_content"])
-        assert any(item['path_str'] == 'subdir/sub_file.txt' for item in result["tree_data_with_embedded_content"])
+        nested_tree_root = result["tree_data_with_embedded_content"]
+        assert isinstance(nested_tree_root, dict)
+        # Root name is the name of the temporary extraction directory
+        assert nested_tree_root["name"] == query.local_path.name + "/"
+        assert nested_tree_root["path"] == "."
+        assert nested_tree_root["type"] == "DIRECTORY"
+
+        # Use helper to find nodes
+        file1_node_found = find_node_in_nested_tree(nested_tree_root, "file1.txt")
+        assert file1_node_found is not None
+        assert file1_node_found["file_content"] == "Hello Zip"
+
+        file2_node_found = find_node_in_nested_tree(nested_tree_root, "file2.py")
+        assert file2_node_found is not None
+        assert file2_node_found["file_content"] == "print('Zip Hello')"
+
+        subdir_file_node_found = find_node_in_nested_tree(nested_tree_root, "subdir/sub_file.txt")
+        assert subdir_file_node_found is not None
+        assert subdir_file_node_found["file_content"] == "Hello from zip subdir"
+
+        empty_file_node_found = find_node_in_nested_tree(nested_tree_root, "empty_file.txt")
+        assert empty_file_node_found is not None
+        # Assuming empty file content is an empty string
+        assert empty_file_node_found.get("file_content", "") == ""
+
 
         # Check concatenated content
         concatenated_content = result["concatenated_content_for_txt"]
         assert "FILE: file1.txt" in concatenated_content; assert "Hello Zip" in concatenated_content
         assert "FILE: file2.py" in concatenated_content; assert "print('Zip Hello')" in concatenated_content
         assert "FILE: subdir/sub_file.txt" in concatenated_content; assert "Hello from zip subdir" in concatenated_content
-
-        # Check embedded content
-        file1_node = next(item for item in result["tree_data_with_embedded_content"] if item["name"] == "file1.txt")
-        assert file1_node["file_content"] == "Hello Zip"
-        file2_node = next(item for item in result["tree_data_with_embedded_content"] if item["name"] == "file2.py")
-        assert file2_node["file_content"] == "print('Zip Hello')"
-        sub_file_node = next(item for item in result["tree_data_with_embedded_content"] if item["name"] == "sub_file.txt" and "subdir" in item["path_str"])
-        assert sub_file_node["file_content"] == "Hello from zip subdir"
 
     finally:
         if query.temp_extract_path and query.temp_extract_path.exists():
@@ -99,18 +113,29 @@ async def test_ingest_query_zip_with_gitingest(tmp_path: Path, sample_query: Ing
         # Expecting file.txt and .gitingest
         assert result["num_files"] == 2
 
-        assert isinstance(result["tree_data_with_embedded_content"], list)
-        assert any(item['path_str'] == 'file.txt' for item in result["tree_data_with_embedded_content"])
-        assert not any(item['path_str'] == 'file.log' for item in result["tree_data_with_embedded_content"])
+        nested_tree_root = result["tree_data_with_embedded_content"]
+        assert isinstance(nested_tree_root, dict)
+        assert nested_tree_root["name"] == query.local_path.name + "/"
+        assert nested_tree_root["path"] == "."
+        assert nested_tree_root["type"] == "DIRECTORY"
 
-        file_txt_node = next(item for item in result["tree_data_with_embedded_content"] if item["name"] == "file.txt")
-        assert file_txt_node["file_content"] == "Include me"
+        file_txt_node_found = find_node_in_nested_tree(nested_tree_root, "file.txt")
+        assert file_txt_node_found is not None
+        assert file_txt_node_found["file_content"] == "Include me"
+
+        gitingest_node_found = find_node_in_nested_tree(nested_tree_root, ".gitingest")
+        assert gitingest_node_found is not None
+        assert gitingest_node_found["file_content"] == '[config]\nignore_patterns = ["*.log"]'
+
+        assert find_node_in_nested_tree(nested_tree_root, "file.log") is None
 
         concatenated_content = result["concatenated_content_for_txt"]
         assert "FILE: file.txt" in concatenated_content
         assert "Include me" in concatenated_content
+        assert "FILE: .gitingest" in concatenated_content
+        assert '[config]\nignore_patterns = ["*.log"]' in concatenated_content
         assert "Exclude me" not in concatenated_content
-        assert "file.log" not in concatenated_content # Check it's not even listed as a file
+        assert "file.log" not in concatenated_content
     finally:
         if query.temp_extract_path and query.temp_extract_path.exists(): shutil.rmtree(query.temp_extract_path, ignore_errors=True)
 
@@ -130,3 +155,17 @@ async def test_ingest_query_zip_invalid(tmp_path: Path, sample_query: IngestionQ
     invalid_zip_path.write_text("This is not a valid zip archive content.")
     with pytest.raises(zipfile.BadZipFile):
         await parse_query(source=str(invalid_zip_path), max_file_size=sample_query.max_file_size, from_web=False)
+
+# Helper function to find a node in the new nested tree structure
+def find_node_in_nested_tree(node: Optional[Dict[str, Any]], target_path: str) -> Optional[Dict[str, Any]]:
+    if not node:
+        return None
+    if node.get("path") == target_path:
+        return node
+
+    if node.get("type") == "DIRECTORY" and "children" in node and isinstance(node["children"], list):
+        for child in node["children"]:
+            found = find_node_in_nested_tree(child, target_path)
+            if found:
+                return found
+    return None

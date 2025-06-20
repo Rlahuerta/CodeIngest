@@ -5,9 +5,10 @@ import os
 import pytest
 import warnings
 import zipfile
-import logging # <--- ADDED IMPORT
+import logging
 from pathlib import Path
 from unittest.mock import patch, MagicMock
+from typing import Optional, Dict, Any, List # Added List for create_mock_fs_node if used, Dict, Any, Optional
 
 from CodeIngest.ingestion import ingest_query, apply_gitingest_file, _process_node, _process_file, limit_exceeded
 from CodeIngest.query_parsing import IngestionQuery
@@ -75,17 +76,33 @@ def test_ingest_query_directory(temp_directory: Path, sample_query: IngestionQue
     # Total = 10. (dir2 and .hiddendir contents are ignored by patterns)
     assert result["num_files"] == 10 # Actual files in the tree_data after symlink filtering, including .gitingest
 
-    assert isinstance(result["tree_data_with_embedded_content"], list)
-    assert any(item['path_str'] == '.gitingest' for item in result["tree_data_with_embedded_content"])
-    assert any(item['path_str'] == 'file1.txt' for item in result["tree_data_with_embedded_content"])
-    assert any(item['path_str'] == 'src/subfile2.py' for item in result["tree_data_with_embedded_content"])
-    assert any(item['path_str'] == '.hiddenfile' for item in result["tree_data_with_embedded_content"])
-    assert not any(item['path_str'].startswith('dir2/') for item in result["tree_data_with_embedded_content"])
-    assert not any(item['path_str'].startswith('.hiddendir/') for item in result["tree_data_with_embedded_content"])
-    assert not any(item['name'] == 'symlink_to_file1' for item in result["tree_data_with_embedded_content"]) # Symlinks excluded from tree
+    nested_tree_root = result["tree_data_with_embedded_content"]
+    assert isinstance(nested_tree_root, dict) # Root of a nested tree is a dict
+    assert nested_tree_root["name"] == temp_directory.name + "/"
+    assert nested_tree_root["path"] == "."
+    assert nested_tree_root["type"] == "DIRECTORY"
+
+    # Use helper to find nodes
+    assert find_node_in_nested_tree(nested_tree_root, ".gitingest") is not None
+    file1_node_found = find_node_in_nested_tree(nested_tree_root, "file1.txt")
+    assert file1_node_found is not None
+    assert file1_node_found["file_content"] == "Hello World"
+
+    src_subfile2_node = find_node_in_nested_tree(nested_tree_root, "src/subfile2.py")
+    assert src_subfile2_node is not None
+    assert src_subfile2_node["file_content"] == "print('Hello from src')"
+
+    hidden_node_found = find_node_in_nested_tree(nested_tree_root, ".hiddenfile")
+    assert hidden_node_found is not None
+    assert hidden_node_found["file_content"] == "Hidden Content"
+
+    assert find_node_in_nested_tree(nested_tree_root, "dir2/file_dir2.txt") is None
+    assert find_node_in_nested_tree(nested_tree_root, ".hiddendir/hidden_in_dir.txt") is None
+    assert find_node_in_nested_tree(nested_tree_root, "symlink_to_file1") is None
+
 
     # concatenated_content_for_txt should still contain content from non-symlink files
-    assert "FILE: file1.txt" in result["concatenated_content_for_txt"] # This format is from _gather_file_contents
+    assert "FILE: file1.txt" in result["concatenated_content_for_txt"]
     assert "Hello World" in result["concatenated_content_for_txt"]
     assert "FILE: src/subfile2.py" in result["concatenated_content_for_txt"]
     assert "print('Hello from src')" in result["concatenated_content_for_txt"]
@@ -96,14 +113,9 @@ def test_ingest_query_directory(temp_directory: Path, sample_query: IngestionQue
     # Symlink content is read by _gather_file_contents if it points to a text file.
     # However, symlinks themselves are filtered from tree_data by _create_tree_data.
     # _gather_file_contents includes a placeholder for symlinks.
-    assert "SYMLINK: symlink_to_file1 ->" in result["concatenated_content_for_txt"]
+    assert "SYMLINK: symlink_to_file1 ->" in result["concatenated_content_for_txt"] # _gather_file_contents includes symlink placeholders
 
-
-    # Test for embedded content in tree_data
-    file1_node = next(item for item in result["tree_data_with_embedded_content"] if item["name"] == "file1.txt")
-    assert file1_node["file_content"] == "Hello World"
-    py_node = next(item for item in result["tree_data_with_embedded_content"] if item["name"] == "file2.py")
-    assert py_node["file_content"] == "print('Hello')"
+    # Already checked specific embedded content above with find_node_in_nested_tree
 
 
 def test_ingest_query_single_file(temp_directory: Path, sample_query: IngestionQuery) -> None:
@@ -119,14 +131,14 @@ def test_ingest_query_single_file(temp_directory: Path, sample_query: IngestionQ
     assert "Lines: 1" in result["summary_str"]
     assert result["num_files"] == 1
 
-    assert isinstance(result["tree_data_with_embedded_content"], list)
-    assert len(result["tree_data_with_embedded_content"]) == 1
-    tree_item = result["tree_data_with_embedded_content"][0]
-    assert tree_item['name'] == 'file1.txt'
-    assert tree_item['path_str'] == 'file1.txt'
-    assert tree_item['file_content'] == "Hello World"
+    nested_tree_root = result["tree_data_with_embedded_content"]
+    assert isinstance(nested_tree_root, dict)
+    assert nested_tree_root['name'] == 'file1.txt'
+    assert nested_tree_root['path'] == 'file1.txt' # For single file, path is filename
+    assert nested_tree_root['type'] == "FILE"
+    assert nested_tree_root['file_content'] == "Hello World"
 
-    assert "FILE: file1.txt" in result["concatenated_content_for_txt"] # This format is from _gather_file_contents
+    assert "FILE: file1.txt" in result["concatenated_content_for_txt"]
     assert "Hello World" in result["concatenated_content_for_txt"]
 
 
@@ -172,13 +184,13 @@ def test_ingest_query_single_file_no_content(temp_directory: Path, sample_query:
     assert "Lines: 1" in result["summary_str"] # Line count for placeholder like "[Non-text file]"
     assert result["num_files"] == 1
 
-    assert isinstance(result["tree_data_with_embedded_content"], list)
-    assert len(result["tree_data_with_embedded_content"]) == 1
-    tree_item = result["tree_data_with_embedded_content"][0]
-    assert tree_item['name'] == 'non_text_file.bin'
-    assert tree_item['file_content'] == "[Non-text file]" # Embedded content check
+    nested_tree_root = result["tree_data_with_embedded_content"]
+    assert isinstance(nested_tree_root, dict)
+    assert nested_tree_root['name'] == 'non_text_file.bin'
+    assert nested_tree_root['type'] == "FILE"
+    assert nested_tree_root['file_content'] == "[Non-text file]"
 
-    assert "FILE: non_text_file.bin" in result["concatenated_content_for_txt"] # This format is from _gather_file_contents
+    assert "FILE: non_text_file.bin" in result["concatenated_content_for_txt"]
     assert "[Non-text file]" in result["concatenated_content_for_txt"]
 
 
@@ -384,12 +396,19 @@ def test_ingest_query_single_file_is_directory(temp_directory: Path, sample_quer
     assert "Files analyzed: 4" in result["summary_str"] # Pre-filter count from summary
     assert result["num_files"] == 4 # Actual files in tree
 
-    assert isinstance(result["tree_data_with_embedded_content"], list)
-    assert any(item['path_str'] == 'subfile1.txt' for item in result["tree_data_with_embedded_content"])
-    assert any(item['path_str'] == 'subdir/file_subdir.py' for item in result["tree_data_with_embedded_content"])
+    nested_tree_root = result["tree_data_with_embedded_content"]
+    assert isinstance(nested_tree_root, dict)
+    assert nested_tree_root["name"] == dir_path.name + "/"
+    assert nested_tree_root["path"] == "." # Root of ingestion is the dir itself
+    assert nested_tree_root["type"] == "DIRECTORY"
 
-    subfile1_node = next(item for item in result["tree_data_with_embedded_content"] if item["name"] == "subfile1.txt")
-    assert subfile1_node["file_content"] == "Hello from src"
+    subfile1_node_found = find_node_in_nested_tree(nested_tree_root, "subfile1.txt")
+    assert subfile1_node_found is not None
+    assert subfile1_node_found["file_content"] == "Hello from src"
+
+    subdir_file_node = find_node_in_nested_tree(nested_tree_root, "subdir/file_subdir.py")
+    assert subdir_file_node is not None
+    assert subdir_file_node["file_content"] == "print('Hello from subdir')"
 
     assert "FILE: subfile1.txt" in result["concatenated_content_for_txt"]
     assert "Hello from src" in result["concatenated_content_for_txt"]
@@ -412,3 +431,19 @@ def test_filesystemnode_sort_children_not_directory() -> None:
 
 # --- Commented out read_chunks tests ---
 # ... (tests remain commented out) ...
+
+# Helper function to find a node in the new nested tree structure
+# Added at the end to ensure it's defined before use by tests above through hoisting
+def find_node_in_nested_tree(node: Optional[Dict[str, Any]], target_path: str) -> Optional[Dict[str, Any]]:
+    if not node:
+        return None
+    # Assuming 'path' is the key for the relative path in the nested tree nodes
+    if node.get("path") == target_path:
+        return node
+
+    if node.get("type") == "DIRECTORY" and "children" in node and isinstance(node["children"], list):
+        for child in node["children"]:
+            found = find_node_in_nested_tree(child, target_path)
+            if found:
+                return found
+    return None
