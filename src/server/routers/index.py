@@ -1,6 +1,7 @@
 # src/server/routers/index.py
 import shutil
 import uuid
+import logging # Added import
 from pathlib import Path
 from typing import Optional
 from fastapi import APIRouter, Form, Request, File, UploadFile
@@ -10,6 +11,7 @@ from server.query_processor import process_query, RAW_UPLOADS_PATH # Import RAW_
 from server.server_config import EXAMPLE_REPOS, templates
 from server.server_utils import limiter
 
+logger = logging.getLogger(__name__) # Added logger instance
 router = APIRouter()
 
 @router.get("/", response_class=HTMLResponse)
@@ -54,6 +56,7 @@ async def index_post(
             # If saving fails, pass an error message via input_text to process_query
             # so it can be displayed in the template.
             # Keep zip_file object for context if needed by process_query for display.
+            logger.error(f"Failed to save uploaded ZIP file '{zip_file.filename if zip_file else 'unknown_filename'}': {e}", exc_info=True) # Added logging
             return await process_query(request=request, source_type=source_type,
                                        input_text=f"Error saving uploaded ZIP: {e}", # Pass error as input_text
                                        zip_file=zip_file, # Pass original zip_file
