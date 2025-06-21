@@ -129,30 +129,9 @@
                         <div class="relative">
                             <div class="w-full h-full rounded bg-gray-900 translate-y-1 translate-x-1 absolute inset-0"></div>
                             <div class="directory-structure w-full p-4 bg-[#fff4da] border-[3px] border-gray-900 rounded font-mono text-sm resize-y focus:outline-none relative z-10 h-[215px] overflow-auto whitespace-nowrap"
-                                 id="directory-structure-container" readonly>
-                                {%- for item in tree_data -%}
-                                    {%- set name_html -%} {# Prepare name/link HTML #}
-                                        {# Use item.full_relative_path for link construction #}
-                                        {%- if not is_local_path and base_repo_url and item.type != 'SYMLINK' and item.full_relative_path -%}
-                                            {%- set item_type = 'blob' if item.type == 'FILE' else 'tree' -%}
-                                            {%- set effective_ref = repo_ref if repo_ref else 'main' -%}
-                                            {# URL Encode the relative path for safety #}
-                                            {%- set encoded_path = item.full_relative_path | urlencode -%}
-                                            {%- set href = base_repo_url ~ '/' ~ item_type ~ '/' ~ effective_ref ~ '/' ~ encoded_path -%}
-                                            <a href="{{ href }}" target="_blank" class="hover:underline" onclick="event.stopPropagation();"><span class="name-text">{{ item.name }}</span></a>
-                                        {%- else -%}
-                                            <span class="name-text">{{- item.name -}}</span>
-                                        {%- endif -%}
-                                    {%- endset -%}
-                                    {# Render line, using the pre-calculated prefix #}
-                                    <div class="tree-line {% if item.type == 'DIRECTORY' %}font-medium{% endif %} cursor-pointer hover:text-gray-500"
-                                         onclick="toggleFile(this)"
-                                         data-relative-path="{{ item.full_relative_path }}" {# Store full path for JS #}
-                                         data-depth="{{ item.depth }}">
-                                        {# Replace space with   in prefix for HTML rendering #}
-                                        <span class="prefix">{{ item.prefix | replace(' ', ' ') | safe }}</span>{{- name_html | safe -}}
-                                    </div>
-                                {%- endfor -%}
+                                 id="directory-structure-container">
+                                {# Removed the for loop that was here #}
+                                <pre class="text-sm">{{ directory_structure_string if directory_structure_string is defined else "" }}</pre>
                             </div>
                         </div>
                     </div>
@@ -175,7 +154,7 @@
                     </div>
                     <div class="relative">
                         <div class="w-full h-full rounded bg-gray-900 translate-y-1 translate-x-1 absolute inset-0"></div>
-                        <textarea class="result-text w-full p-4 bg-[#fff4da] border-[3px] border-gray-900 rounded font-mono text-sm resize-y focus:outline-none relative z-10"
+                        <textarea id="result-text" class="result-text w-full p-4 bg-[#fff4da] border-[3px] border-gray-900 rounded font-mono text-sm resize-y focus:outline-none relative z-10"
                                   style="min-height: {{ '600px' if content else 'calc(100vh - 800px)' }}"
                                   readonly>{{ content }}</textarea>
                     </div>

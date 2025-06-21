@@ -28,24 +28,31 @@ function toggleFile(element) {
 function copyDirectoryStructureText() {
     const container = document.getElementById('directory-structure-container');
     if (!container) return;
+
+    // Check if the container has a <pre> tag (new structure)
+    const preElement = container.querySelector('pre');
     let textToCopy = "";
-    const lines = container.querySelectorAll('div.tree-line');
-    lines.forEach((line, index) => {
-        const prefixSpan = line.querySelector('span.prefix');
-        const nameSpan = line.querySelector('span.name-text');
-        const nameContent = line.querySelector('a')?.textContent || (nameSpan ? nameSpan.textContent : '');
-        // Get innerHTML to capture  , then replace it and the visual chars
-        const prefixHtml = prefixSpan ? prefixSpan.innerHTML : '';
-        // Replace   with space, keep visual chars for copy
-        const prefixText = prefixHtml.replace(/ /g, ' ');
-        // Add newline before if not the first line
-        if (index > 0) { textToCopy += '\n'; }
-        textToCopy += prefixText + nameContent.trim();
-    });
+
+    if (preElement) {
+        textToCopy = preElement.textContent || "";
+    } else {
+        // Fallback to old method if <pre> tag is not found (for robustness or during transition)
+        const lines = container.querySelectorAll('div.tree-line');
+        lines.forEach((line, index) => {
+            const prefixSpan = line.querySelector('span.prefix');
+            const nameSpan = line.querySelector('span.name-text');
+            const nameContent = line.querySelector('a')?.textContent || (nameSpan ? nameSpan.textContent : '');
+            const prefixHtml = prefixSpan ? prefixSpan.innerHTML : '';
+            const prefixText = prefixHtml.replace(/ /g, ' ');
+            if (index > 0) { textToCopy += '\n'; }
+            textToCopy += prefixText + nameContent.trim();
+        });
+    }
+
     const button = document.querySelector('[onclick="copyDirectoryStructureText()"]');
     if (!button) return;
     const originalContent = button.innerHTML;
-    navigator.clipboard.writeText(textToCopy.trim()) // Trim only at the end
+    navigator.clipboard.writeText(textToCopy.trim())
         .then(() => { button.innerHTML = 'Copied!'; setTimeout(() => { button.innerHTML = originalContent; }, 1000); })
         .catch(err => { button.innerHTML = 'Failed'; setTimeout(() => { button.innerHTML = originalContent; }, 1000); });
 }
@@ -54,21 +61,29 @@ function copyDirectoryStructureText() {
 function copyFullDigest() {
     const treeContainer = document.getElementById('directory-structure-container');
     let treeText = "";
-     if (treeContainer) {
-         const lines = treeContainer.querySelectorAll('div.tree-line');
-         lines.forEach((line, index) => {
-             const prefixSpan = line.querySelector('span.prefix');
-             const nameSpan = line.querySelector('span.name-text');
-             const nameContent = line.querySelector('a')?.textContent || (nameSpan ? nameSpan.textContent : '');
-             // Get innerHTML to capture  , then replace it
-             const prefixHtml = prefixSpan ? prefixSpan.innerHTML : '';
-             const prefixText = prefixHtml.replace(/ /g, ' ');
-              if (index > 0) { treeText += '\n'; }
-             treeText += prefixText + nameContent.trim();
-         });
+
+    if (treeContainer) {
+        const preElement = treeContainer.querySelector('pre');
+        if (preElement) {
+            treeText = preElement.textContent || "";
+        } else {
+            // Fallback to old method
+            const lines = treeContainer.querySelectorAll('div.tree-line');
+            lines.forEach((line, index) => {
+                const prefixSpan = line.querySelector('span.prefix');
+                const nameSpan = line.querySelector('span.name-text');
+                const nameContent = line.querySelector('a')?.textContent || (nameSpan ? nameSpan.textContent : '');
+                const prefixHtml = prefixSpan ? prefixSpan.innerHTML : '';
+                const prefixText = prefixHtml.replace(/ /g, ' ');
+                if (index > 0) { treeText += '\n'; }
+                treeText += prefixText + nameContent.trim();
+            });
+        }
     }
-    const filesContent = document.querySelector('.result-text').value;
-    const fullDigest = `${treeText.trim()}\n\n${filesContent}`; // Trim tree text at the end
+    const filesContentElement = document.getElementById('result-text'); // Use ID selector
+    const filesContent = filesContentElement ? filesContentElement.value : '';
+
+    const fullDigest = `${treeText.trim()}\n\n${filesContent}`;
     const button = document.querySelector('[onclick="copyFullDigest()"]');
     const originalText = button.innerHTML;
     navigator.clipboard.writeText(fullDigest).then(() => {
@@ -107,7 +122,6 @@ function initializeSlider() {
     const sizeValueDisplay = document.getElementById('size_value');
 
     if (!slider || !sizeValueDisplay) {
-        // console.warn("Slider or size display element not found."); // Original comment
         return;
     }
 
@@ -129,17 +143,81 @@ function initializeSlider() {
     slider.addEventListener('input', updateSliderAppearance);
 }
 
-function setupGlobalEnterHandler() { /* ... */ } // Assuming this is defined elsewhere or not critical for this task
+// New function to be added
+function copyText(elementId) {
+    const element = document.getElementById(elementId);
+    const button = document.querySelector(`[onclick*="copyText('${elementId}')"]`); // Find the button that called this
+    let originalButtonContent = null;
+    if (button) {
+        originalButtonContent = button.innerHTML;
+    }
+
+    if (element && typeof element.value !== 'undefined') { // Check if it's an input/textarea
+        const textToCopy = element.value;
+        navigator.clipboard.writeText(textToCopy)
+            .then(() => {
+                if (button && originalButtonContent !== null) {
+                    button.innerHTML = 'Copied!';
+                    setTimeout(() => {
+                        button.innerHTML = originalButtonContent;
+                    }, 1500);
+                } else {
+                    // Fallback or indicate success differently if button context is lost
+                    console.log('Text copied to clipboard (button not found or original content issue).');
+                }
+            })
+            .catch(err => {
+                console.error('Failed to copy text: ', err);
+                if (button && originalButtonContent !== null) {
+                    button.innerHTML = 'Failed!';
+                    setTimeout(() => {
+                        button.innerHTML = originalButtonContent;
+                    }, 1500);
+                }
+            });
+    } else if (element) { // Fallback for non-input elements like <pre> or <div>
+        const textToCopy = element.innerText || element.textContent;
+         navigator.clipboard.writeText(textToCopy)
+            .then(() => {
+                if (button && originalButtonContent !== null) {
+                    button.innerHTML = 'Copied!';
+                    setTimeout(() => {
+                        button.innerHTML = originalButtonContent;
+                    }, 1500);
+                }
+            })
+            .catch(err => {
+                console.error('Failed to copy text from non-input: ', err);
+                 if (button && originalButtonContent !== null) {
+                    button.innerHTML = 'Failed!';
+                    setTimeout(() => {
+                        button.innerHTML = originalButtonContent;
+                    }, 1500);
+                }
+            });
+    } else {
+        console.error('Element not found:', elementId);
+        if (button && originalButtonContent !== null) {
+            button.innerHTML = 'Error!';
+            setTimeout(() => {
+                button.innerHTML = originalButtonContent;
+            }, 1500);
+        }
+    }
+}
+
+
+function setupGlobalEnterHandler() { /* ... */ }
 
 document.addEventListener('DOMContentLoaded', () => {
     initializeSlider();
-    setupGlobalEnterHandler(); // Assuming this is defined elsewhere or not critical for this task
+    setupGlobalEnterHandler();
 });
 
 // Make functions globally available if needed by inline handlers
-// window.copyText = copyText; // copyText is not defined in this file
-window.copyDirectoryStructureText = copyDirectoryStructureText; // Ensure this is global
-window.copyFullDigest = copyFullDigest;       // Ensure this is global
-window.toggleFile = toggleFile;               // Ensure this is global
-// window.handleSubmit = handleSubmit;        // handleSubmit is not defined in this file
-// window.submitExample = submitExample; // submitExample is not defined in this file
+window.copyText = copyText; // Ensure this is now assigned
+window.copyDirectoryStructureText = copyDirectoryStructureText;
+window.copyFullDigest = copyFullDigest;
+window.toggleFile = toggleFile;
+// window.handleSubmit = handleSubmit;
+// window.submitExample = submitExample;

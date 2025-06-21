@@ -229,7 +229,8 @@ async def process_query(
         context.update({
             "result": True,
             "summary": ingestion_result["summary_str"],
-            "tree_data": ingestion_result["tree_data"],
+            "tree_data": ingestion_result["tree_data"], # This is the nested tree
+            "directory_structure_string": ingestion_result["directory_structure_text"], # Added for direct display
             "content": content_to_display,
             "ingest_id": ingest_id_for_download,
             "is_local_path": not query_obj_from_ingest.url and source_type != 'zip_file', # True if local dir/file
